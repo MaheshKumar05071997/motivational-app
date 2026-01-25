@@ -18,7 +18,6 @@ import { BlurView } from "expo-blur";
 import { LinearGradient } from "expo-linear-gradient";
 import { useFocusEffect } from "expo-router";
 import { useCallback } from "react";
-import { ImageBackground } from "react-native";
 import Animated, {
   Easing,
   FadeInDown,
@@ -36,6 +35,12 @@ export default function HomeScreen() {
   // Animation Trigger
   const [triggerKey, setTriggerKey] = useState(0);
 
+  // ... existing state ...
+  const [dynamicQuotes, setDynamicQuotes] = useState([
+    { text: "Loading wisdom...", author: "" },
+  ]);
+  const [spotlight, setSpotlight] = useState<any>(null); // <--- For the Spotlight Card
+
   // Re-trigger animation on Focus
   useFocusEffect(
     useCallback(() => {
@@ -43,72 +48,77 @@ export default function HomeScreen() {
     }, []),
   );
 
-  // Rotating Quotes Logic
-  const quotes = [
-    {
-      text: "Peace comes from within. Do not seek it without.",
-      author: "Buddha",
-    },
-    { text: "The best way out is always through.", author: "Robert Frost" },
-    {
-      text: "Quiet the mind, and the soul will speak.",
-      author: "Ma Jaya Sati Bhagavati",
-    },
-    {
-      text: "Breathe. It’s just a bad day, not a bad life.",
-      author: "Unknown",
-    },
-    {
-      text: "Nothing can bring you peace but yourself.",
-      author: "Ralph Waldo Emerson",
-    },
-    {
-      text: "Do not let the behavior of others destroy your inner peace.",
-      author: "Dalai Lama",
-    },
-    { text: "This too shall pass.", author: "Persian Adage" },
-    { text: "Happiness depends upon ourselves.", author: "Aristotle" },
-    { text: "Turn your wounds into wisdom.", author: "Oprah Winfrey" },
-    {
-      text: "Be the change that you wish to see in the world.",
-      author: "Mahatma Gandhi",
-    },
-  ];
-
   const [currentQuoteIndex, setCurrentQuoteIndex] = useState(0);
 
+  // Use dynamicQuotes instead of hardcoded quotes
   useEffect(() => {
     const interval = setInterval(() => {
-      setCurrentQuoteIndex((prev) => (prev + 1) % quotes.length);
-    }, 6000); // Change every 6 seconds
+      setCurrentQuoteIndex((prev) => (prev + 1) % dynamicQuotes.length);
+    }, 6000);
     return () => clearInterval(interval);
-  }, []);
+  }, [dynamicQuotes]); // Add dependency
 
-  const todaysQuote = quotes[currentQuoteIndex]; // Use the rotating quote
+  const todaysQuote = dynamicQuotes[currentQuoteIndex] || dynamicQuotes[0];
   const [streak, setStreak] = useState(0);
   const [loading, setLoading] = useState(true);
   const [userName, setUserName] = useState("Friend");
+  const [greeting, setGreeting] = useState("Good Morning,"); // <--- NEW STATE
 
-  useEffect(() => {
-    fetchUserData();
-  }, []);
+  // Helper to check time
+  const updateGreeting = () => {
+    const hrs = new Date().getHours();
+    if (hrs < 12) setGreeting("Good Morning,");
+    else if (hrs < 17) setGreeting("Good Afternoon,");
+    else setGreeting("Good Evening,");
+  };
+
+  // Triggered every time you visit the tab
+  useFocusEffect(
+    useCallback(() => {
+      setTriggerKey((prev) => prev + 1); // Replay animations
+      updateGreeting(); // Update Greeting
+      fetchUserData(); // Update Name & Streak
+    }, []),
+  );
 
   async function fetchUserData() {
     try {
+      // 1. Fetch User Profile
       const {
         data: { user },
       } = await supabase.auth.getUser();
       if (user) {
-        // 1. Get Name (from email or metadata)
-        setUserName(user.email?.split("@")[0] || "Friend");
-
-        // 2. Get Streak
         const { data } = await supabase
           .from("profiles")
-          .select("streak_count")
+          .select("full_name, streak_count")
           .eq("id", user.id)
           .single();
-        if (data) setStreak(data.streak_count);
+
+        if (data) {
+          setUserName(data.full_name || user.email?.split("@")[0] || "Friend");
+          setStreak(data.streak_count || 0);
+        }
+      }
+
+      // 2. Fetch Dynamic Quotes
+      const { data: quoteData } = await supabase
+        .from("home_quotes")
+        .select("text, author")
+        .eq("is_active", true);
+
+      if (quoteData && quoteData.length > 0) {
+        setDynamicQuotes(quoteData);
+      }
+
+      // 3. Fetch Active Spotlight
+      const { data: spotlightData } = await supabase
+        .from("home_spotlights")
+        .select("*")
+        .eq("is_active", true)
+        .single();
+
+      if (spotlightData) {
+        setSpotlight(spotlightData);
       }
     } catch (e) {
       console.log(e);
@@ -139,14 +149,8 @@ export default function HomeScreen() {
   };
 
   return (
-    <ImageBackground
-      // 👇 CHANGE THIS URL to update your background!
-      // Current: Calm Aurora / Peaceful Night
-      source={{
-        uri: "https://static.vecteezy.com/system/resources/thumbnails/014/378/559/small/dark-black-and-gray-blurred-gradient-background-has-a-little-abstract-light-soft-background-for-wallpaper-design-graphic-and-presentation-backdrop-wall-free-photo.jpg",
-      }}
-      style={styles.container}
-    >
+    <View style={styles.container}>
+      {/* ScrollView key={triggerKey} ensures animation replay on focus */}
       <ScrollView
         key={triggerKey} // This forces the animations to replay on focus
         contentContainerStyle={{ paddingBottom: 100 }}
@@ -157,7 +161,7 @@ export default function HomeScreen() {
           style={styles.header}
         >
           <View>
-            <Text style={styles.greeting}>Good Morning,</Text>
+            <Text style={styles.greeting}>{greeting}</Text>
             <Text style={styles.username}>{userName}</Text>
           </View>
           <BlurView intensity={20} tint="light" style={styles.glassBadge}>
@@ -205,77 +209,46 @@ export default function HomeScreen() {
 
         {/* ACTION: Start Morning Boost */}
         {/* 🔥 SPOTLIGHT SECTION */}
-        <View style={{ marginTop: 10, marginBottom: 30 }}>
-          <Text style={styles.sectionTitle}>Spotlight Insight 💡</Text>
-          <TouchableOpacity
-            activeOpacity={0.9}
-            onPress={() => {
-              playTrackList(
-                [
-                  {
-                    id: "spotlight-1",
-                    url: "https://www.soundhelix.com/examples/mp3/SoundHelix-Song-1.mp3",
-                    title: "Stop. Breathe. Reset.",
-                    artist: "Mukesh Bhai",
-                    artwork:
-                      "https://images.unsplash.com/photo-1506126613408-eca07ce68773?q=80&w=2000&auto=format&fit=crop",
-                    duration: 180,
-                    is_locked: false,
-                  },
-                ],
-                0,
-              );
-              router.push("/player");
-            }}
-            style={styles.spotlightCard}
+        {/* 🔥 DYNAMIC SPOTLIGHT SECTION */}
+        {spotlight && (
+          <Animated.View
+            entering={FadeInDown.delay(500).springify().damping(12)}
+            style={{ marginTop: 10, marginBottom: 30 }}
           >
-            <Image
-              source={{
-                uri: "https://images.unsplash.com/photo-1518241353330-0f7941c2d9b5?q=80&w=2525&auto=format&fit=crop",
-              }}
-              style={styles.spotlightImage}
-            />
-            {/* Heart Button Overlay */}
+            <Text style={styles.sectionTitle}>Spotlight Insight 💡</Text>
             <TouchableOpacity
-              onPress={() => toggleFavorite({ id: "spotlight-1" })} // Dummy ID for now, connect real ID later
-              style={{
-                position: "absolute",
-                top: 15,
-                right: 15,
-                zIndex: 20,
-                backgroundColor: "rgba(0,0,0,0.5)",
-                padding: 8,
-                borderRadius: 50,
-              }}
-            >
-              <Ionicons
-                name={
-                  likedTrackIds.has("spotlight-1") ? "heart" : "heart-outline"
+              activeOpacity={0.9}
+              onPress={() => {
+                // If linked to audio, navigate to player
+                if (spotlight.audio_url || spotlight.linked_audio_id) {
+                  router.push("/player");
                 }
-                size={24}
-                color={likedTrackIds.has("spotlight-1") ? "#FF453A" : "#fff"}
-              />
-            </TouchableOpacity>
-            <LinearGradient
-              colors={["transparent", "rgba(0,0,0,0.9)"]}
-              style={styles.spotlightOverlay}
+              }}
+              style={styles.spotlightCard}
             >
-              <View style={styles.spotlightTagContainer}>
-                <Text style={styles.spotlightTag}>MUST LISTEN TODAY</Text>
-              </View>
-              <Text style={styles.spotlightTitle}>Why You Feel Stuck</Text>
-              <Text style={styles.spotlightSub}>
-                Life running too fast? Pause for 3 minutes and regain your
-                power.
-              </Text>
+              <Image
+                source={{ uri: spotlight.image_url }}
+                style={styles.spotlightImage}
+              />
 
-              <View style={styles.playCapsule}>
-                <Ionicons name="play" size={16} color="#000" />
-                <Text style={styles.playText}>Play Session • 3 min</Text>
-              </View>
-            </LinearGradient>
-          </TouchableOpacity>
-        </View>
+              <LinearGradient
+                colors={["transparent", "rgba(0,0,0,0.9)"]}
+                style={styles.spotlightOverlay}
+              >
+                <View style={styles.spotlightTagContainer}>
+                  <Text style={styles.spotlightTag}>FEATURED</Text>
+                </View>
+                <Text style={styles.spotlightTitle}>{spotlight.title}</Text>
+                <Text style={styles.spotlightSub}>{spotlight.subtitle}</Text>
+
+                <View style={styles.playCapsule}>
+                  <Ionicons name="play" size={16} color="#000" />
+                  <Text style={styles.playText}>Listen Now</Text>
+                </View>
+              </LinearGradient>
+            </TouchableOpacity>
+          </Animated.View>
+        )}
         {/* MOOD CHECK-IN */}
         <Animated.View entering={FadeInDown.delay(600).springify()}>
           <Text style={styles.sectionTitle}>How are you feeling?</Text>
@@ -333,7 +306,11 @@ export default function HomeScreen() {
         </Animated.View>
 
         {/* ⏱️ QUICK RESETS */}
-        <View style={{ marginBottom: 30 }}>
+        {/* ⏱️ QUICK RESETS (Now Bouncy) */}
+        <Animated.View
+          entering={FadeInDown.delay(700).springify().damping(12)}
+          style={{ marginBottom: 30 }}
+        >
           <Text style={styles.sectionTitle}>Short on Time? ⚡</Text>
           <ScrollView horizontal showsHorizontalScrollIndicator={false}>
             {[
@@ -355,26 +332,26 @@ export default function HomeScreen() {
               </TouchableOpacity>
             ))}
           </ScrollView>
-        </View>
+        </Animated.View>
 
-        {/* SHORTCUTS: Categories */}
-        <View style={styles.rowBetween}>
-          <Text style={styles.sectionTitle}>Explore</Text>
-          <TouchableOpacity onPress={() => router.push("/(tabs)/explore")}>
-            <Text style={styles.seeAll}>See All</Text>
-          </TouchableOpacity>
-        </View>
+        {/* SHORTCUTS: Categories (Now Bouncy) */}
+        <Animated.View entering={FadeInDown.delay(900).springify().damping(12)}>
+          <View style={styles.rowBetween}>
+            <Text style={styles.sectionTitle}>Explore</Text>
+            <TouchableOpacity onPress={() => router.push("/(tabs)/explore")}>
+              <Text style={styles.seeAll}>See All</Text>
+            </TouchableOpacity>
+          </View>
 
-        <View style={styles.categoryGrid}>
-          {/* Simple shortcut cards */}
-          {/* Matches our new explore categories */}
-          <CategoryShortcut label="Energy" icon="sunny" color="#feca57" />
-          <CategoryShortcut label="Sleep" icon="moon" color="#5f27cd" />
-          <CategoryShortcut label="Focus" icon="pulse" color="#ff9f43" />
-          <CategoryShortcut label="Anxiety" icon="water" color="#48dbfb" />
-        </View>
+          <View style={styles.categoryGrid}>
+            <CategoryShortcut label="Energy" icon="sunny" color="#feca57" />
+            <CategoryShortcut label="Sleep" icon="moon" color="#5f27cd" />
+            <CategoryShortcut label="Focus" icon="pulse" color="#ff9f43" />
+            <CategoryShortcut label="Anxiety" icon="water" color="#48dbfb" />
+          </View>
+        </Animated.View>
       </ScrollView>
-    </ImageBackground>
+    </View>
   );
 }
 
@@ -491,7 +468,7 @@ function AnimatedGradientCard({ children }) {
 const styles = StyleSheet.create({
   container: {
     flex: 1,
-    backgroundColor: "#121212",
+    //backgroundColor: "#121212",
     paddingTop: 50,
     paddingHorizontal: 20,
   },

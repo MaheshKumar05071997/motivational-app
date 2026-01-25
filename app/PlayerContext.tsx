@@ -7,7 +7,7 @@ import React, {
   useRef,
   useState,
 } from "react";
-import { AppState } from "react-native"; // <--- ADD THIS
+import { AppState, Vibration } from "react-native";
 import { supabase } from "../supabaseConfig";
 
 const PlayerContext = createContext(null);
@@ -15,7 +15,8 @@ const PlayerContext = createContext(null);
 export function PlayerProvider({ children }) {
   const router = useRouter(); // <--- NEW
   const soundRef = useRef(null); // <--- NEW (To track sound even during logout)
-  const currentTrackRef = useRef(null); // <--- Fix for stats
+  const currentTrackRef = useRef(null);
+  const hasRewardedRef = useRef(false); // <--- ADD THIS
   const [sound, setSound] = useState(null);
   const [isPlaying, setIsPlaying] = useState(false);
   const [currentTrack, setCurrentTrack] = useState(null);
@@ -153,6 +154,8 @@ export function PlayerProvider({ children }) {
     try {
       if (sound) await sound.unloadAsync();
 
+      hasRewardedRef.current = false; // <--- RESET REWARD FLAG
+
       const { sound: newSound, status } = await Audio.Sound.createAsync(
         { uri: track.url },
         { shouldPlay: shouldPlay },
@@ -176,8 +179,17 @@ export function PlayerProvider({ children }) {
       setIsBuffering(status.isBuffering);
       setIsPlaying(status.isPlaying);
 
+      // --- MOVED REWARD LOGIC HERE (Runs in Background) ---
+      if (
+        status.durationMillis > 0 &&
+        status.positionMillis > status.durationMillis * 0.9 &&
+        !hasRewardedRef.current
+      ) {
+        hasRewardedRef.current = true;
+        triggerCelebration(); // <--- Triggers the Pop-up & Haptics globally
+      }
+
       if (status.didJustFinish) {
-        // Use REF to get the actual finished track, not the stale one
         if (currentTrackRef.current) {
           updateStats(currentTrackRef.current.duration);
         }
@@ -327,8 +339,7 @@ export function PlayerProvider({ children }) {
   // --- GLOBAL REWARD LOGIC ---
   async function triggerCelebration() {
     setShowCelebration(true);
-    // Haptic Feedback (Vibration)
-    // Note: Import * as Haptics from 'expo-haptics' if you have it, else standard vibration
+    Vibration.vibrate(500); // <--- VIBRATE PHONE
 
     try {
       const {
@@ -387,6 +398,7 @@ export function PlayerProvider({ children }) {
         likedTrackIds, // <--- EXPOSE DATA
         triggerCelebration,
         showCelebration,
+        setShowCelebration, // <--- ADD THIS LINE
         fullPlayerVisible: !!currentTrack,
       }}
     >

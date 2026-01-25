@@ -1,4 +1,5 @@
 import { useColorScheme } from "@/hooks/use-color-scheme";
+import { Ionicons } from "@expo/vector-icons";
 import AsyncStorage from "@react-native-async-storage/async-storage";
 import {
   DarkTheme,
@@ -6,16 +7,18 @@ import {
   Theme,
   ThemeProvider,
 } from "@react-navigation/native";
+import * as Device from "expo-device";
 import * as Notifications from "expo-notifications";
 import { Stack, usePathname, useRouter, useSegments } from "expo-router";
 import { useEffect, useState } from "react";
-import { ActivityIndicator, Platform, View } from "react-native";
-import LiveBackground from "../components/LiveBackground"; // <--- ADD THIS
+import { ActivityIndicator, Platform, Text, View } from "react-native";
+import Animated, { FadeInDown, FadeOutUp } from "react-native-reanimated"; // <--- ANIMATIONS
+import LiveBackground from "../components/LiveBackground";
 import { supabase } from "../supabaseConfig";
 
 // Contexts & Components
 import MiniPlayer from "../components/MiniPlayer";
-import { PlayerProvider } from "./PlayerContext";
+import { PlayerProvider, usePlayer } from "./PlayerContext"; // <--- ADD usePlayer
 
 Notifications.setNotificationHandler({
   handleNotification: async () => ({
@@ -91,8 +94,8 @@ export default function RootLayout() {
   }, [isReady, session, isFirstLaunch]);
 
   async function registerNotifications() {
-    // WRAP IN TRY-CATCH TO PREVENT CRASH IN EXPO GO (SDK 53)
     try {
+      // 1. Android Channel Setup
       if (Platform.OS === "android") {
         await Notifications.setNotificationChannelAsync("default", {
           name: "default",
@@ -102,18 +105,42 @@ export default function RootLayout() {
         });
       }
 
-      const { status: existingStatus } =
-        await Notifications.getPermissionsAsync();
-      let finalStatus = existingStatus;
-      if (existingStatus !== "granted") {
-        const { status } = await Notifications.requestPermissionsAsync();
-        finalStatus = status;
-      }
-      if (finalStatus !== "granted") {
-        return;
+      // 2. Check Device & Permissions
+      if (Device.isDevice) {
+        const { status: existingStatus } =
+          await Notifications.getPermissionsAsync();
+        let finalStatus = existingStatus;
+        if (existingStatus !== "granted") {
+          const { status } = await Notifications.requestPermissionsAsync();
+          finalStatus = status;
+        }
+        if (finalStatus !== "granted") {
+          console.log("Permission not granted!");
+          return;
+        }
+
+        // 3. CAPTURE TOKEN & SAVE TO SUPABASE
+        const projectId = undefined; // Automatically inferred by Expo
+        const token = (await Notifications.getExpoPushTokenAsync({ projectId }))
+          .data;
+        console.log("🔥 Push Token:", token);
+
+        const {
+          data: { user },
+        } = await supabase.auth.getUser();
+        if (user) {
+          const { error } = await supabase
+            .from("profiles")
+            .update({ push_token: token })
+            .eq("id", user.id);
+
+          if (error) console.log("DB Token Error:", error.message);
+        }
+      } else {
+        console.log("Must use physical device for Push Notifications");
       }
 
-      // Schedule Daily "Aaj Ka Vichar" at 8:00 AM
+      // 4. (Optional) Keep your local daily schedule if you want
       await Notifications.cancelAllScheduledNotificationsAsync();
       await Notifications.scheduleNotificationAsync({
         content: {
@@ -129,7 +156,7 @@ export default function RootLayout() {
         } as any,
       });
     } catch (error) {
-      console.log("Notification Error (Safe to ignore in Expo Go):", error);
+      console.log("Notification Error:", error);
     }
   }
 
@@ -185,8 +212,56 @@ export default function RootLayout() {
             pathname !== "/player" &&
             pathname !== "/profile" &&
             pathname !== "/paywall" && <MiniPlayer />}
+
+          {/* GLOBAL VICTORY POPUP (Floats over EVERYTHING) */}
+          <GlobalCelebration />
         </View>
       </PlayerProvider>
     </ThemeProvider>
   );
+
+  // --- HELPER COMPONENT FOR REWARD POPUP ---
+  function GlobalCelebration() {
+    const { showCelebration } = usePlayer();
+    if (!showCelebration) return null;
+
+    return (
+      <Animated.View
+        entering={FadeInDown.springify()}
+        exiting={FadeOutUp}
+        style={{
+          position: "absolute",
+          top: 60, // Safe area top
+          alignSelf: "center",
+          backgroundColor: "#FFD700", // Gold
+          paddingHorizontal: 25,
+          paddingVertical: 15,
+          borderRadius: 50,
+          flexDirection: "row",
+          alignItems: "center",
+          zIndex: 99999, // Highest Layer
+          elevation: 10,
+          shadowColor: "#FFD700",
+          shadowOffset: { width: 0, height: 0 },
+          shadowOpacity: 0.8,
+          shadowRadius: 20,
+        }}
+      >
+        <Ionicons
+          name="trophy"
+          size={28}
+          color="#000"
+          style={{ marginRight: 10 }}
+        />
+        <View>
+          <Text style={{ color: "#000", fontWeight: "900", fontSize: 16 }}>
+            DIVINE VIBES
+          </Text>
+          <Text style={{ color: "#333", fontWeight: "700", fontSize: 12 }}>
+            +10 XP EARNED
+          </Text>
+        </View>
+      </Animated.View>
+    );
+  }
 }

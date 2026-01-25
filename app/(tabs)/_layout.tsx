@@ -2,6 +2,9 @@ import { Tabs, usePathname } from "expo-router";
 import React from "react";
 import { Platform, View } from "react-native";
 
+// Don't forget to import:
+import LiveBackground from "@/components/LiveBackground";
+
 import { HapticTab } from "@/components/haptic-tab";
 import MiniPlayer from "@/components/MiniPlayer";
 import { Colors } from "@/constants/theme";
@@ -9,7 +12,6 @@ import { useColorScheme } from "@/hooks/use-color-scheme";
 import { Ionicons } from "@expo/vector-icons";
 
 import { usePlayer } from "@/app/PlayerContext"; // Ensure this path is correct
-import Animated, { FadeInDown, FadeOutUp } from "react-native-reanimated";
 
 export default function TabLayout() {
   const { showCelebration } = usePlayer();
@@ -19,23 +21,37 @@ export default function TabLayout() {
   const colorScheme = useColorScheme();
 
   return (
-    <>
+    <View style={{ flex: 1, backgroundColor: "#000" }}>
+      {/* 1. The Engine: Live Background sits here forever */}
+      <LiveBackground />
+
+      {/* 2. Your Existing Tabs Logic */}
       <Tabs
         sceneContainerStyle={{ backgroundColor: "transparent" }}
         screenOptions={{
           headerShown: false,
           tabBarBackground: () => (
-            <View style={{ flex: 1, backgroundColor: "rgba(0,0,0,0.8)" }} />
+            // Make tab background glass-like so live wallpaper shows through
+            <View style={{ flex: 1, backgroundColor: "rgba(0,0,0,0.3)" }} />
           ),
           tabBarActiveTintColor: Colors[colorScheme ?? "light"].tint,
           tabBarButton: HapticTab,
           tabBarStyle: Platform.select({
             ios: {
               position: "absolute",
-              backgroundColor: "rgba(0,0,0,0.8)",
-              borderTopColor: "#333",
+              backgroundColor: "rgba(0,0,0,0.3)", // More transparent
+              borderTopColor: "rgba(255,255,255,0.1)",
+              elevation: 0,
             },
-            default: { backgroundColor: "#000", borderTopColor: "#333" },
+            default: {
+              backgroundColor: "rgba(0,0,0,0.3)",
+              borderTopColor: "rgba(255,255,255,0.1)",
+              elevation: 0,
+              position: "absolute",
+              bottom: 0,
+              left: 0,
+              right: 0,
+            },
           }),
         }}
       >
@@ -76,66 +92,19 @@ export default function TabLayout() {
           }}
         />
 
-        {/* HIDDEN TAB: Playlist */}
+        {/* HIDDEN TABS */}
         <Tabs.Screen
           name="playlist"
-          options={{
-            href: null,
-            title: "Playlist",
-          }}
+          options={{ href: null, title: "Playlist" }}
         />
-        {/* HIDDEN TAB: Downloads */}
         <Tabs.Screen
           name="downloads"
-          options={{
-            href: null,
-            title: "Offline",
-          }}
+          options={{ href: null, title: "Offline" }}
         />
       </Tabs>
 
-      {/* --- THE FLOATING DECK --- */}
-      {/* Hide MiniPlayer on Profile Screen */}
-      {/* --- GLOBAL VICTORY POPUP --- */}
-      {showCelebration && (
-        <Animated.View
-          entering={FadeInDown.springify()}
-          exiting={FadeOutUp}
-          style={{
-            position: "absolute",
-            top: 60, // Visible on all screens
-            alignSelf: "center",
-            backgroundColor: "#FFD700", // Gold
-            paddingHorizontal: 20,
-            paddingVertical: 12,
-            borderRadius: 30,
-            flexDirection: "row",
-            alignItems: "center",
-            zIndex: 9999, // On top of everything
-            shadowColor: "#000",
-            shadowOffset: { width: 0, height: 4 },
-            shadowOpacity: 0.3,
-            shadowRadius: 10,
-            elevation: 10,
-          }}
-        >
-          <Ionicons
-            name="trophy"
-            size={24}
-            color="#000"
-            style={{ marginRight: 10 }}
-          />
-          <View>
-            <Text style={{ color: "#000", fontWeight: "800", fontSize: 14 }}>
-              DIVINE VIBES
-            </Text>
-            <Text style={{ color: "#000", fontWeight: "600", fontSize: 12 }}>
-              +10 XP Earned
-            </Text>
-          </View>
-        </Animated.View>
-      )}
+      {/* 3. Your MiniPlayer Logic */}
       {!isProfile && <MiniPlayer />}
-    </>
+    </View>
   );
 }

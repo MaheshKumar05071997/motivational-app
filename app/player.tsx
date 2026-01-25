@@ -8,8 +8,6 @@ import { useRouter } from "expo-router";
 import React, { useEffect, useState } from "react";
 import Animated, {
   Easing,
-  FadeInDown,
-  FadeOutUp,
   useAnimatedStyle,
   useSharedValue,
   withRepeat,
@@ -96,12 +94,11 @@ export default function PlayerScreen() {
     toggleFavorite, // <--- New
     likedTrackIds, // <--- New
     triggerCelebration, // <--- Add this
+    setShowCelebration, // <--- ADD THIS LINE
   } = usePlayer();
 
   // --- 2. DOWNLOAD STATE & LOGIC (From Fixed Code) ---
   const [isDownloaded, setIsDownloaded] = useState(false);
-  // --- 3. GAMIFICATION & ANIMATION STATE ---
-  const [showCelebration, setShowCelebration] = useState(false);
   const [hasRewarded, setHasRewarded] = useState(false);
 
   // Animation Values
@@ -138,16 +135,10 @@ export default function PlayerScreen() {
     }
 
     // Trigger Reward at 90% completion
+    // Trigger Reward at 90% completion
     if (position > duration * 0.9 && !hasRewarded && !isBuffering) {
       setHasRewarded(true);
-      //setShowCelebration(true);
-
-      // CALL THE FUNCTION TO SAVE POINTS TO DB
-      //updateUserStats();
-      triggerCelebration(); // <--- CALL GLOBAL CONTEXT
-
-      // Hide celebration after 4 seconds
-      setTimeout(() => setShowCelebration(false), 4000);
+      triggerCelebration(); // Calls Global Context
     }
   }, [position, currentTrack?.id]);
 
@@ -478,44 +469,6 @@ export default function PlayerScreen() {
           {/* Bottom Spacer */}
           <View style={{ height: 40 }} />
         </View>
-        {/* --- VICTORY CELEBRATION OVERLAY --- */}
-        {showCelebration && (
-          <Animated.View
-            entering={FadeInDown.springify()}
-            exiting={FadeOutUp}
-            style={{
-              position: "absolute",
-              top: 100, // Near top of screen
-              alignSelf: "center",
-              backgroundColor: "rgba(255, 215, 0, 0.9)", // Gold
-              paddingHorizontal: 20,
-              paddingVertical: 10,
-              borderRadius: 30,
-              flexDirection: "row",
-              alignItems: "center",
-              shadowColor: "#FFD700",
-              shadowOffset: { width: 0, height: 0 },
-              shadowOpacity: 0.8,
-              shadowRadius: 20,
-              zIndex: 100,
-            }}
-          >
-            <Ionicons
-              name="trophy"
-              size={24}
-              color="#000"
-              style={{ marginRight: 8 }}
-            />
-            <View>
-              <Text style={{ color: "#000", fontWeight: "800", fontSize: 14 }}>
-                SESSION COMPLETE
-              </Text>
-              <Text style={{ color: "#000", fontWeight: "600", fontSize: 10 }}>
-                +10 Mindset Points Earned 🧠
-              </Text>
-            </View>
-          </Animated.View>
-        )}
       </ImageBackground>
     </View>
   );

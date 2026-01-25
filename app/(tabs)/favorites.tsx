@@ -1,24 +1,110 @@
 import { Colors } from "@/constants/theme";
 import { supabase } from "@/supabaseConfig";
 import { Ionicons } from "@expo/vector-icons";
+import { BlurView } from "expo-blur"; // <--- ADD THIS
 import { useFocusEffect, useRouter } from "expo-router";
 import React, { useCallback, useState } from "react";
 import {
   ActivityIndicator,
-  FlatList,
   Image,
   StyleSheet,
   Text,
   TouchableOpacity,
   View,
 } from "react-native";
-import Animated, { FadeInDown, FadeInUp } from "react-native-reanimated";
+import Animated, {
+  FadeInDown,
+  FadeInUp,
+  Layout,
+  ZoomIn,
+} from "react-native-reanimated";
 import { usePlayer } from "../PlayerContext";
+
+// --- NEW: PREMIUM GLASS CARD COMPONENT ---
+const FavoriteCard = ({
+  item,
+  index,
+  isPlaying,
+  isActive,
+  onPress,
+  onRemove,
+}: any) => {
+  return (
+    <Animated.View
+      entering={FadeInDown.delay(index * 100)
+        .springify()
+        .damping(12)}
+      layout={Layout.springify()} // Animate when items are removed
+      style={{ marginBottom: 15 }}
+    >
+      <TouchableOpacity
+        activeOpacity={0.8}
+        onPress={onPress}
+        style={[styles.cardContainer, isActive && styles.activeCardBorder]}
+      >
+        <BlurView intensity={20} tint="dark" style={styles.cardGlass}>
+          {/* 1. Image with Active Indicator */}
+          <View style={styles.imageContainer}>
+            <Image source={{ uri: item.image_url }} style={styles.cardImage} />
+            {isActive && (
+              <View style={styles.playingOverlay}>
+                <Ionicons name="bar-chart" size={16} color="#FFF" />
+              </View>
+            )}
+          </View>
+
+          {/* 2. Text Info */}
+          <View style={styles.infoContainer}>
+            <Text
+              style={[
+                styles.cardTitle,
+                isActive && { color: Colors.premium.gold },
+              ]}
+              numberOfLines={1}
+            >
+              {item.title}
+            </Text>
+            <Text style={styles.cardArtist} numberOfLines={1}>
+              {isActive ? "Now Playing..." : "Saved Audio"}
+            </Text>
+          </View>
+
+          {/* 3. Actions (Play/Remove) */}
+          <View style={styles.actionRow}>
+            {/* Play Button */}
+            <View
+              style={[
+                styles.iconBtn,
+                isActive && { backgroundColor: Colors.premium.gold },
+              ]}
+            >
+              <Ionicons
+                name={isActive && isPlaying ? "pause" : "play"}
+                size={18}
+                color={isActive ? "#000" : "#FFF"}
+              />
+            </View>
+
+            {/* Remove Button (Heart Break) */}
+            <TouchableOpacity onPress={onRemove} style={styles.removeBtn}>
+              <Ionicons
+                name="heart-dislike-outline"
+                size={20}
+                color="rgba(255,255,255,0.4)"
+              />
+            </TouchableOpacity>
+          </View>
+        </BlurView>
+      </TouchableOpacity>
+    </Animated.View>
+  );
+};
 
 export default function FavoritesScreen() {
   const router = useRouter();
   const [favorites, setFavorites] = useState([]);
   const [loading, setLoading] = useState(true);
+  const [refreshKey, setRefreshKey] = useState(0); // <--- NEW: For Animation Reset
   const {
     playTrackList,
     currentTrack,
@@ -29,6 +115,7 @@ export default function FavoritesScreen() {
 
   useFocusEffect(
     useCallback(() => {
+      setRefreshKey((prev) => prev + 1); // <--- FIX: Triggers animation on every visit
       fetchFavorites();
     }, []),
   );
@@ -56,6 +143,12 @@ export default function FavoritesScreen() {
       setLoading(false);
     }
   }
+
+  // --- FIX: Instant Remove Logic ---
+  const handleRemove = (item) => {
+    setFavorites((prev) => prev.filter((t) => t.id !== item.id)); // 1. Remove from UI instantly
+    toggleFavorite(item); // 2. Update DB in background
+  };
 
   const handlePlay = (item, index) => {
     // Format for player
@@ -85,7 +178,7 @@ export default function FavoritesScreen() {
         <TouchableOpacity onPress={() => router.back()} style={styles.backBtn}>
           <Ionicons name="arrow-back" size={24} color="#fff" />
         </TouchableOpacity>
-        <Text style={styles.title}>Saved Insights 🧠</Text>
+        {/*/<Text style={styles.title}>Saved Insights 🧠</Text>*/}
       </Animated.View>
 
       {loading ? (
@@ -95,70 +188,59 @@ export default function FavoritesScreen() {
           style={{ marginTop: 50 }}
         />
       ) : (
-        <FlatList
+        <Animated.FlatList
+          key={refreshKey} // <--- FIX: This restarts the animation
           data={favorites}
-          keyExtractor={(item) => item.id.toString()}
-          contentContainerStyle={{ padding: 20, paddingBottom: 100 }}
-          renderItem={({ item, index }) => {
-            const isActive = currentTrack && currentTrack.id === item.id;
-            return (
-              <Animated.View
-                entering={FadeInDown.delay(index * 100).springify()}
+          keyExtractor={(item: any) => item.id}
+          itemLayoutAnimation={Layout.springify()} // Smooth reordering when item removed
+          contentContainerStyle={{ paddingHorizontal: 20, paddingBottom: 120 }}
+          showsVerticalScrollIndicator={false}
+          // Header Component (Your Collection Title)
+          ListHeaderComponent={
+            <Animated.View
+              entering={FadeInDown.delay(100).springify()}
+              style={{ marginBottom: 20 }}
+            >
+              <Text style={styles.headerTitle}>Aapke Favourites</Text>
+              <Text style={styles.headerSub}>
+                aapke {favorites.length} sabse favorites
+              </Text>
+            </Animated.View>
+          }
+          // Empty State (If no favorites)
+          ListEmptyComponent={
+            <Animated.View
+              entering={ZoomIn.delay(300)}
+              style={styles.emptyContainer}
+            >
+              <View style={styles.emptyIconCircle}>
+                <Ionicons
+                  name="heart-outline"
+                  size={50}
+                  color="rgba(255,255,255,0.3)"
+                />
+              </View>
+              <Text style={styles.emptyText}>No treasures found yet.</Text>
+              <TouchableOpacity
+                onPress={() => router.push("/explore")}
+                style={styles.exploreBtn}
               >
-                <TouchableOpacity onPress={() => handlePlay(item, index)}>
-                  <View style={[styles.row, isActive && styles.activeRow]}>
-                    {/* ALBUM ART */}
-                    <Image
-                      source={{
-                        uri:
-                          item.image_url || "https://via.placeholder.com/100",
-                      }}
-                      style={{
-                        width: 50,
-                        height: 50,
-                        borderRadius: 8,
-                        marginRight: 15,
-                      }}
-                    />
-                    <View style={styles.info}>
-                      <Text
-                        style={[
-                          styles.songTitle,
-                          isActive && { color: Colors.premium.gold },
-                        ]}
-                        numberOfLines={1}
-                      >
-                        {item.title}
-                      </Text>
-                      {/* Safety Check added for duration */}
-                      <Text style={styles.duration}>
-                        {Math.floor((item.duration_sec || 0) / 60)}:
-                        {((item.duration_sec || 0) % 60)
-                          .toString()
-                          .padStart(2, "0")}
-                      </Text>
-                    </View>
-                    <View
-                      style={{
-                        flexDirection: "row",
-                        alignItems: "center",
-                        gap: 15,
-                      }}
-                    >
-                      {/* Delete/Heart Button */}
-                      <TouchableOpacity onPress={() => toggleFavorite(item)}>
-                        <Ionicons name="heart" size={22} color="#FF453A" />
-                      </TouchableOpacity>
-
-                      <Ionicons
-                        name={isActive && isPlaying ? "pause" : "play"}
-                        size={20}
-                        color={isActive ? Colors.premium.gold : "#fff"}
-                      />
-                    </View>
-                  </View>
-                </TouchableOpacity>
-              </Animated.View>
+                <Text style={styles.exploreBtnText}>Find Motivation</Text>
+              </TouchableOpacity>
+            </Animated.View>
+          }
+          // The New Card Renderer
+          renderItem={({ item, index }: any) => {
+            const isActive = currentTrack?.id === item.id;
+            return (
+              <FavoriteCard
+                item={item}
+                index={index}
+                isActive={isActive}
+                isPlaying={isPlaying}
+                onPress={() => handlePlay(item, index)}
+                onRemove={() => handleRemove(item)} // <--- FIX: Use new instant remove handler
+              />
             );
           }}
         />
@@ -168,38 +250,93 @@ export default function FavoritesScreen() {
 }
 
 const styles = StyleSheet.create({
-  container: { flex: 1, backgroundColor: "transparent" }, // <--- Changed to transparent
-  header: {
+  container: { flex: 1, backgroundColor: "transparent" },
+
+  // Header
+  headerTitle: {
+    color: "#FFF",
+    fontSize: 32,
+    fontWeight: "800",
+    marginTop: 20,
+  },
+  headerSub: { color: "rgba(255,255,255,0.6)", fontSize: 14, marginBottom: 10 },
+
+  // Premium Card
+  cardContainer: {
+    borderRadius: 20,
+    overflow: "hidden",
+    borderWidth: 1,
+    borderColor: "rgba(255,255,255,0.1)",
+    backgroundColor: "rgba(0,0,0,0.3)",
+  },
+  activeCardBorder: {
+    borderColor: Colors.premium.gold,
+    borderWidth: 1.5,
+    backgroundColor: "rgba(255,215,0,0.05)", // Slight gold tint
+  },
+  cardGlass: {
     flexDirection: "row",
     alignItems: "center",
-    paddingTop: 60,
-    paddingHorizontal: 20,
+    padding: 12,
+  },
+
+  // Image Section
+  imageContainer: {
+    width: 60,
+    height: 60,
+    borderRadius: 12,
+    overflow: "hidden",
+    position: "relative",
+    backgroundColor: "#333",
+  },
+  cardImage: { width: "100%", height: "100%" },
+  playingOverlay: {
+    ...StyleSheet.absoluteFillObject,
+    backgroundColor: "rgba(0,0,0,0.5)",
+    alignItems: "center",
+    justifyContent: "center",
+  },
+
+  // Info Section
+  infoContainer: { flex: 1, marginLeft: 15, justifyContent: "center", gap: 4 },
+  cardTitle: { color: "#FFF", fontSize: 16, fontWeight: "700" },
+  cardArtist: {
+    color: "rgba(255,255,255,0.5)",
+    fontSize: 12,
+    fontWeight: "500",
+  },
+
+  // Actions
+  actionRow: { flexDirection: "row", alignItems: "center", gap: 10 },
+  iconBtn: {
+    width: 32,
+    height: 32,
+    borderRadius: 16,
+    backgroundColor: "rgba(255,255,255,0.1)",
+    alignItems: "center",
+    justifyContent: "center",
+  },
+  removeBtn: {
+    padding: 8,
+  },
+
+  // Empty State
+  emptyContainer: { alignItems: "center", marginTop: 100 },
+  emptyIconCircle: {
+    width: 100,
+    height: 100,
+    borderRadius: 50,
+    backgroundColor: "rgba(255,255,255,0.05)",
+    alignItems: "center",
+    justifyContent: "center",
     marginBottom: 20,
   },
-  backBtn: {
-    padding: 10,
-    backgroundColor: "rgba(0,0,0,0.5)",
-    borderRadius: 20,
-    marginRight: 15,
+  emptyText: { color: "#888", fontSize: 16, marginBottom: 20 },
+  exploreBtn: {
+    paddingHorizontal: 30,
+    paddingVertical: 12,
+    backgroundColor: Colors.premium.gold,
+    borderRadius: 25,
   },
-  title: { color: "#fff", fontSize: 28, fontWeight: "800" },
-  row: {
-    flexDirection: "row",
-    alignItems: "center",
-    padding: 15,
-    marginBottom: 10,
-    borderRadius: 12,
-    backgroundColor: "rgba(0,0,0,0.5)", // Darker for white text
-    borderWidth: 1,
-    borderColor: "transparent", // <--- Invisible by default
-    overflow: "hidden",
-  },
-  activeRow: {
-    borderColor: Colors.premium.gold,
-    borderWidth: 1,
-    backgroundColor: "rgba(212, 175, 55, 0.1)",
-  },
-  info: { flex: 1 },
-  songTitle: { color: "#fff", fontSize: 16, fontWeight: "600" },
-  duration: { color: "#888", fontSize: 12, marginTop: 4 },
+  exploreBtnText: { color: "#000", fontWeight: "bold" },
 });

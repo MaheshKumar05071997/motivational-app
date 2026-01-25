@@ -6,7 +6,6 @@ import {
   ActivityIndicator,
   Dimensions,
   Image,
-  ImageBackground,
   ScrollView,
   StyleSheet,
   Text, // <--- ADD THIS
@@ -125,14 +124,7 @@ export default function ExploreScreen() {
 
   return (
     <View style={styles.container}>
-      {/* Dynamic Background */}
-      <ImageBackground
-        source={{
-          uri: "https://images.unsplash.com/photo-1534796636912-3b95b3ab5986?q=80&w=2342&auto=format&fit=crop",
-        }}
-        style={StyleSheet.absoluteFill}
-        blurRadius={80} // Heavy blur for that dreamy vibe
-      />
+      {/* Background removed to show Live Orb Wallpaper */}
 
       <ScrollView contentContainerStyle={styles.scrollContent}>
         {/* Header */}
@@ -436,7 +428,7 @@ function ShimmerCard({ item, index, onPress }) {
 const styles = StyleSheet.create({
   container: {
     flex: 1,
-    backgroundColor: "#000",
+    //backgroundColor: "#000",
   },
   scrollContent: {
     paddingTop: 70,
