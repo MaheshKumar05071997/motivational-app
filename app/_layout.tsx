@@ -15,8 +15,10 @@ import { Stack, usePathname, useRouter, useSegments } from "expo-router";
 import { useEffect, useState } from "react";
 import { ActivityIndicator, Alert, Platform, Text, View } from "react-native";
 import Animated, { FadeInDown, FadeOutUp } from "react-native-reanimated"; // <--- ANIMATIONS
+import TrackPlayer from "react-native-track-player";
 import LiveBackground from "../components/LiveBackground";
 import { supabase } from "../supabaseConfig";
+import { PlaybackService } from "./services/playbackService"; // Adjust path if needed
 
 // Contexts & Components
 import CustomAlert from "../components/CustomAlert";
@@ -31,6 +33,9 @@ Notifications.setNotificationHandler({
     shouldSetBadge: false,
   }),
 });
+
+// Register the service (Must be outside the component)
+TrackPlayer.registerPlaybackService(() => PlaybackService);
 
 export default function RootLayout() {
   const [session, setSession] = useState<any>(null);
