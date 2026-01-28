@@ -43,3 +43,7 @@ app-example
 /android
 app.zip 
 app/services 
+
+# Secrets
+assets/*firebase-adminsdk*.json
+assets/client_secret_*.json
