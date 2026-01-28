@@ -6,8 +6,7 @@
   "build": {
     "development": {
       "developmentClient": true,
-      "distribution": "internal",
-      "workflow": "bare"
+      "distribution": "internal"
     },
     "preview": {
       "distribution": "internal"
