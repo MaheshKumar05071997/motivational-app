@@ -1,0 +1,29 @@
+{
+  "project_info": {
+    "project_number": "29812622878",
+    "project_id": "motivationalapp-33b33",
+    "storage_bucket": "motivationalapp-33b33.firebasestorage.app"
+  },
+  "client": [
+    {
+      "client_info": {
+        "mobilesdk_app_id": "1:29812622878:android:bd56f8e9bfa089119f100f",
+        "android_client_info": {
+          "package_name": "com.mahesh67308.motivationalapp"
+        }
+      },
+      "oauth_client": [],
+      "api_key": [
+        {
+          "current_key": "AIzaSyDHuEcDgyQQBQGU52wFhyHBaJd72q4pWW0"
+        }
+      ],
+      "services": {
+        "appinvite_service": {
+          "other_platform_oauth_client": []
+        }
+      }
+    }
+  ],
+  "configuration_version": "1"
+}

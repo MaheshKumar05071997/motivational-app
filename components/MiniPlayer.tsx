@@ -28,6 +28,7 @@ export default function MiniPlayer() {
     playPrev,
     queue,
     currentIndex,
+    closePlayer, // <--- Get the close function
   } = usePlayer();
 
   // Logic to check if buttons should be active
@@ -86,6 +87,34 @@ export default function MiniPlayer() {
       >
         {/* GLASS EFFECT CONTAINER */}
         <BlurView intensity={40} tint="dark" style={styles.glassContent}>
+          {/* CLOSE BUTTON (Visible only when PAUSED) */}
+          {!isPlaying && (
+            <TouchableOpacity
+              onPress={(e) => {
+                e.stopPropagation();
+                closePlayer();
+              }}
+              style={{
+                position: "absolute",
+                top: 6,
+                right: 6,
+                backgroundColor: "#fff",
+                borderRadius: 12, // Fully round
+                width: 22, // Slightly smaller
+                height: 22, // Slightly smaller
+                justifyContent: "center",
+                alignItems: "center",
+                zIndex: 999,
+                shadowColor: "#000",
+                shadowOffset: { width: 0, height: 2 },
+                shadowOpacity: 0.3,
+                shadowRadius: 2,
+                elevation: 5,
+              }}
+            >
+              <Ionicons name="close" size={16} color="#000" />
+            </TouchableOpacity>
+          )}
           {/* A. ALBUM ART */}
           <View style={styles.artContainer}>
             <Image
@@ -220,8 +249,8 @@ const styles = StyleSheet.create({
   controls: {
     flexDirection: "row",
     alignItems: "center",
-    gap: 15,
-    marginRight: 5,
+    gap: 20,
+    marginRight: 35,
   },
   playBtn: {
     width: 36,

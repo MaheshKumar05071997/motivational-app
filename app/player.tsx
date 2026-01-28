@@ -17,7 +17,6 @@ import Animated, {
 
 import {
   ActivityIndicator,
-  Alert,
   Dimensions,
   ImageBackground,
   StyleSheet,
@@ -95,11 +94,11 @@ export default function PlayerScreen() {
     likedTrackIds, // <--- New
     triggerCelebration, // <--- Add this
     setShowCelebration, // <--- ADD THIS LINE
+    showAlert,
   } = usePlayer();
 
   // --- 2. DOWNLOAD STATE & LOGIC (From Fixed Code) ---
   const [isDownloaded, setIsDownloaded] = useState(false);
-  const [hasRewarded, setHasRewarded] = useState(false);
 
   // Animation Values
   const breatheScale = useSharedValue(1);
@@ -123,33 +122,14 @@ export default function PlayerScreen() {
     }
   }, [isPlaying]);
 
-  // B. Victory Logic (Trigger Reward when 90% complete)
-  // B. Victory Logic (Trigger Reward when 90% complete)
-  useEffect(() => {
-    if (!currentTrack || duration === 0) return;
-
-    // Reset reward flag on new track
-    if (position < 1000 && hasRewarded) {
-      setHasRewarded(false);
-      setShowCelebration(false);
-    }
-
-    // Trigger Reward at 90% completion
-    // Trigger Reward at 90% completion
-    if (position > duration * 0.9 && !hasRewarded && !isBuffering) {
-      setHasRewarded(true);
-      triggerCelebration(); // Calls Global Context
-    }
-  }, [position, currentTrack?.id]);
-
   // Animated Styles
   const animatedArtStyle = useAnimatedStyle(() => ({
     transform: [{ scale: breatheScale.value }],
   }));
 
-  // ✅ Consistent filename helper
+  // ✅ SANITIZED FILENAME (Removes special chars like ?, /, :)
   const getLocalPath = (title: string) =>
-    FileSystem.documentDirectory + title.replace(/\s+/g, "_") + ".mp3";
+    FileSystem.documentDirectory + title.replace(/[^a-zA-Z0-9]/g, "_") + ".mp3";
 
   // ✅ Check helper (Single Source of Truth)
   const checkIfDownloaded = async (track) => {
@@ -186,16 +166,29 @@ export default function PlayerScreen() {
     if (!currentTrack) return;
 
     if (currentTrack.is_locked && !isPremium) {
-      Alert.alert("Premium Only", "Subscribe to download this track.");
+      showAlert({
+        title: "Premium Only",
+        message: "Subscribe to download this track and listen offline.",
+        icon: "lock-closed",
+        primaryText: "Go Premium",
+        onPrimaryPress: () => router.push("/paywall"),
+        secondaryText: "Cancel",
+      });
       return;
     }
 
     try {
       const fileUri = getLocalPath(currentTrack.title);
 
-      Alert.alert("Downloading...", "Saving to your library.");
+      // 1. Show "Downloading" Alert
+      showAlert({
+        title: "Downloading... ☁️",
+        message: "Saving track to your library. Please wait.",
+        icon: "cloud-download",
+        primaryText: "Hide", // Allows user to close if they want
+      });
 
-      // Create download resumable (Fixed version)
+      // Create download resumable
       const downloadResumable = FileSystem.createDownloadResumable(
         currentTrack.url,
         fileUri,
@@ -203,16 +196,33 @@ export default function PlayerScreen() {
 
       await downloadResumable.downloadAsync();
 
-      // 🔥 Re-check filesystem to confirm
+      // NEW: Also save the Album Art
+      if (currentTrack.artwork) {
+        const imageUri = fileUri.replace(".mp3", ".jpg");
+        await FileSystem.downloadAsync(currentTrack.artwork, imageUri);
+      }
+
+      // Re-check filesystem
       const exists = await checkIfDownloaded(currentTrack);
       setIsDownloaded(exists);
 
+      // 2. Show Success Alert
       setTimeout(() => {
-        Alert.alert("Success ✅", "Saved offline!");
-      }, 100);
+        showAlert({
+          title: "Download Complete ✅",
+          message: "You can now listen to this track offline.",
+          icon: "checkmark-circle",
+          primaryText: "Awesome!",
+        });
+      }, 500); // Small delay to ensure smooth transition
     } catch (e) {
       console.error(e);
-      Alert.alert("Error", "Download failed.");
+      showAlert({
+        title: "Download Failed",
+        message: "Could not save the track. Please check your connection.",
+        icon: "alert-circle",
+        primaryText: "Try Again",
+      });
     }
   };
 
@@ -304,13 +314,30 @@ export default function PlayerScreen() {
                 sleepMinutes > 0 && { backgroundColor: Colors.premium.gold },
               ]}
               onPress={() => {
-                Alert.alert("Sleep Timer 🌙", "Stop audio after...", [
-                  { text: "Off", onPress: () => startSleepTimer(0) },
-                  { text: "15 Mins", onPress: () => startSleepTimer(15) },
-                  { text: "30 Mins", onPress: () => startSleepTimer(30) },
-                  { text: "60 Mins", onPress: () => startSleepTimer(60) },
-                  { text: "Cancel", style: "cancel" },
-                ]);
+                if (sleepMinutes > 0) {
+                  // --- CASE A: TIMER IS ALREADY ON ---
+                  showAlert({
+                    title: "Timer Active ⏳",
+                    message:
+                      "The music will stop automatically. Do you want to turn it off?",
+                    icon: "timer",
+                    primaryText: "Turn Off",
+                    onPrimaryPress: () => startSleepTimer(0), // 0 means stop
+                    secondaryText: "Keep On",
+                    onSecondaryPress: () => {}, // Just close alert
+                  });
+                } else {
+                  // --- CASE B: TIMER IS OFF (Show Options) ---
+                  showAlert({
+                    title: "Sleep Timer 🌙",
+                    message: "Set a timer to stop the music.",
+                    icon: "moon",
+                    primaryText: "30 Mins",
+                    onPrimaryPress: () => startSleepTimer(30),
+                    secondaryText: "60 Mins",
+                    onSecondaryPress: () => startSleepTimer(60),
+                  });
+                }
               }}
             >
               {/* Show Timer Icon if Active, else Menu Icon */}
@@ -367,10 +394,15 @@ export default function PlayerScreen() {
               <TouchableOpacity
                 onPress={
                   isDownloaded
-                    ? () => Alert.alert("Library", "Already downloaded! ✅")
+                    ? () =>
+                        showAlert({
+                          title: "Library",
+                          message: "This track is already downloaded! ✅",
+                          icon: "checkmark-circle",
+                          primaryText: "Got it",
+                        })
                     : downloadTrack
                 }
-                style={{ marginRight: 20 }}
               >
                 <Ionicons
                   name={
@@ -381,14 +413,7 @@ export default function PlayerScreen() {
                 />
               </TouchableOpacity>
 
-              {/* Like Button */}
-              <TouchableOpacity onPress={toggleLike}>
-                <Ionicons
-                  name={isLiked ? "heart" : "heart-outline"}
-                  size={28}
-                  color={isLiked ? Colors.premium.gold : "#FFF"}
-                />
-              </TouchableOpacity>
+              {/* Like Button removed to avoid duplicate */}
             </View>
           </View>
 
@@ -412,21 +437,28 @@ export default function PlayerScreen() {
 
           {/* Controls */}
           <View style={styles.controls}>
-            {/* NEW: Heart Button */}
-            <TouchableOpacity
-              onPress={() => currentTrack && toggleFavorite(currentTrack)}
-              style={[styles.controlBtn, { marginRight: 20 }]}
-            >
-              <Ionicons
-                name={
-                  likedTrackIds.has(currentTrack?.id)
-                    ? "heart"
-                    : "heart-outline"
-                }
-                size={30}
-                color={likedTrackIds.has(currentTrack?.id) ? "#FF453A" : "#888"}
-              />
-            </TouchableOpacity>
+            {/* NEW: Heart Button (Hidden for Offline Tracks) */}
+            {currentTrack?.artist !== "Offline Download" ? (
+              <TouchableOpacity
+                onPress={() => currentTrack && toggleFavorite(currentTrack)}
+                style={[styles.controlBtn, { marginRight: 20 }]}
+              >
+                <Ionicons
+                  name={
+                    likedTrackIds.has(currentTrack?.id)
+                      ? "heart"
+                      : "heart-outline"
+                  }
+                  size={30}
+                  color={
+                    likedTrackIds.has(currentTrack?.id) ? "#FF453A" : "#888"
+                  }
+                />
+              </TouchableOpacity>
+            ) : (
+              // Spacer to keep layout balanced when heart is gone
+              <View style={{ width: 50, marginRight: 20 }} />
+            )}
 
             <TouchableOpacity onPress={playPrev} style={styles.controlBtn}>
               <Ionicons name="play-skip-back" size={35} color="#fff" />

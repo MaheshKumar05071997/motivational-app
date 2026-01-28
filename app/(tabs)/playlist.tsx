@@ -2,11 +2,10 @@ import { Colors } from "@/constants/theme";
 import { supabase } from "@/supabaseConfig";
 import { Ionicons } from "@expo/vector-icons";
 import { BlurView } from "expo-blur";
-import { useFocusEffect, useLocalSearchParams, useRouter } from "expo-router";
-import React, { useCallback, useEffect, useState } from "react";
+import { useLocalSearchParams, useRouter } from "expo-router";
+import React, { useEffect, useState } from "react";
 import {
   ActivityIndicator,
-  Alert,
   FlatList,
   Image,
   StyleSheet,
@@ -18,19 +17,17 @@ import Animated, { FadeInDown } from "react-native-reanimated";
 import { usePlayer } from "../PlayerContext";
 
 export default function PlaylistScreen() {
-  const { categoryId, categoryName } = useLocalSearchParams();
+  const { categoryId } = useLocalSearchParams();
+  // Start with a placeholder so we know if it's loading
+  const [pageTitle, setPageTitle] = useState("Loading...");
   const router = useRouter();
   const [tracks, setTracks] = useState([]);
   const [loading, setLoading] = useState(true);
-  const [isPremium, setIsPremium] = useState(false);
 
-  const { playTrackList, currentTrack, isPlaying } = usePlayer();
-
-  useFocusEffect(
-    useCallback(() => {
-      checkUserStatus();
-    }, []),
-  );
+  // ✅ FIX: Get 'isPremium' from Global Context (which handles 24h logic correctly)
+  // ✅ FIX: Get 'showAlert' too
+  const { playTrackList, currentTrack, isPlaying, isPremium, showAlert } =
+    usePlayer();
 
   useEffect(() => {
     if (categoryId) {
@@ -40,36 +37,36 @@ export default function PlaylistScreen() {
     }
   }, [categoryId]);
 
-  async function checkUserStatus() {
-    const {
-      data: { user },
-    } = await supabase.auth.getUser();
-    if (user) {
-      const { data } = await supabase
-        .from("profiles")
-        .select("is_premium")
-        .eq("id", user.id)
-        .single();
-      if (data) setIsPremium(data.is_premium);
-    }
-  }
-
   async function fetchTracks() {
     try {
-      // FIX 1: specific table name "audios" instead of "songs"
       if (!categoryId) return;
 
+      // 1. Fetch Category Name
+      const { data: catData } = await supabase
+        .from("categories")
+        .select("name")
+        .eq("id", categoryId)
+        .single();
+
+      if (catData) {
+        setPageTitle(catData.name);
+      } else {
+        setPageTitle("Unknown Series");
+      }
+
+      // 2. Fetch Tracks
+      // Now that Admin Panel sends Strings, this will match the UUID correctly.
       let { data, error } = await supabase
         .from("audios")
         .select("*")
-        .eq("category_id", categoryId) // <--- STRICT FILTER
+        .eq("category_id", categoryId)
         .order("created_at", { ascending: true });
 
       if (error) {
-        console.error("Supabase Error:", error);
-      } else {
-        setTracks(data || []);
+        console.log("Track Fetch Error:", error.message);
       }
+
+      setTracks(data || []);
     } catch (err) {
       console.error(err);
     } finally {
@@ -80,14 +77,16 @@ export default function PlaylistScreen() {
   const handlePlayTrack = (track, index) => {
     // 1. Check if locked
     if (track.is_locked && !isPremium) {
-      Alert.alert(
-        "Locked Track 🔒",
-        "Upgrade to Premium to unlock this exclusive content!",
-        [
-          { text: "Cancel", style: "cancel" },
-          { text: "Upgrade", onPress: () => router.push("/paywall") },
-        ],
-      );
+      showAlert({
+        title: "Premium Content 🔒",
+        message:
+          "This ancient wisdom is reserved for Premium souls. Unlock it now?",
+        icon: "diamond", // Custom Icon!
+        primaryText: "Unlock Now",
+        onPrimaryPress: () => router.push("/paywall"),
+        secondaryText: "Later",
+        onSecondaryPress: () => console.log("Cancelled"),
+      });
       return;
     }
 
@@ -138,9 +137,8 @@ export default function PlaylistScreen() {
             <Text style={styles.tagText}>PREMIUM SERIES</Text>
           </View>
 
-          <Text style={styles.heroTitle}>
-            {categoryName || "Mindset Series"}
-          </Text>
+          {/* ✅ FIX: Remove hardcoded 'Mindset Series' fallback */}
+          <Text style={styles.heroTitle}>{pageTitle}</Text>
           <Text style={styles.heroDescription}>
             A curated collection of audio mentorship to help you reset, refocus,
             and rebuild your inner strength.

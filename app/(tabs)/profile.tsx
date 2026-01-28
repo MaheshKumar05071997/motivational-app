@@ -1,4 +1,5 @@
 import { Ionicons, MaterialCommunityIcons } from "@expo/vector-icons";
+import AsyncStorage from "@react-native-async-storage/async-storage";
 import { BlurView } from "expo-blur";
 import { LinearGradient } from "expo-linear-gradient";
 import * as Notifications from "expo-notifications";
@@ -10,7 +11,6 @@ import {
   Image,
   ScrollView,
   StyleSheet,
-  Switch,
   Text,
   TextInput,
   TouchableOpacity,
@@ -41,11 +41,10 @@ const LEVELS = [
     name: "Sadhak",
     subtitle: " The Novice",
     minMinutes: 0,
-    color: "#4ADE80",
+    color: "#4ADE80", // Green
     description: "The journey begins. Discipline is your only friend.",
     avatar: require("@/assets/images/react-logo.png"),
     stickers: [
-      // REPLACE THESE PATHS WITH YOUR ACTUAL SAVED IMAGES
       {
         id: 1,
         name: "Sitting",
@@ -68,7 +67,7 @@ const LEVELS = [
     name: "Yogi",
     subtitle: " The Seeker",
     minMinutes: 100,
-    color: Colors.premium.gold,
+    color: Colors.premium.gold, // Gold
     description: "Balance achieved. The mind is a steady flame.",
     avatar: require("@/assets/images/react-logo.png"),
     stickers: [
@@ -86,11 +85,23 @@ const LEVELS = [
     ],
   },
   {
+    id: "siddha",
+    name: "Siddha",
+    subtitle: " The Proven",
+    minMinutes: 500,
+    color: "#3B82F6", // Electric Blue
+    description: "Mastery over self. You walk the path of fire.",
+    avatar: require("@/assets/images/react-logo.png"), // Placeholder
+    stickers: [
+      { id: 7, name: "Energy", image: require("@/assets/images/yogi_01.png") }, // Placeholder
+    ],
+  },
+  {
     id: "rishi",
     name: "Rishi",
     subtitle: " The Master",
-    minMinutes: 500,
-    color: "#A855F7",
+    minMinutes: 2000, // Increased difficulty
+    color: "#A855F7", // Purple
     description: "One with the cosmos. Silence is the answer.",
     avatar: require("@/assets/images/react-logo.png"),
     stickers: [
@@ -105,6 +116,22 @@ const LEVELS = [
         name: "Nirvana",
         image: require("@/assets/images/rishi_03.png"),
       },
+    ],
+  },
+  {
+    id: "moksha",
+    name: "Moksha",
+    subtitle: " The Legend",
+    minMinutes: 5000, // The Ultimate Goal
+    color: "#FF4500", // Orange/Red
+    description: "Beyond the cycle. You are the source.",
+    avatar: require("@/assets/images/react-logo.png"), // Placeholder
+    stickers: [
+      {
+        id: 11,
+        name: "Eternal",
+        image: require("@/assets/images/rishi_01.png"),
+      }, // Placeholder
     ],
   },
 ];
@@ -340,18 +367,106 @@ const LevelCard = ({
   );
 };
 
+// --- COMPONENT: PREMIUM COUNTDOWN ---
+function PremiumTimer({ expiry, router }) {
+  const [timeLeft, setTimeLeft] = useState("");
+
+  useEffect(() => {
+    if (!expiry) return;
+
+    const updateTimer = () => {
+      const now = new Date();
+      const end = new Date(expiry);
+      const diff = end.getTime() - now.getTime();
+
+      if (diff <= 0) {
+        setTimeLeft("Expired");
+      } else {
+        const h = Math.floor(diff / (1000 * 60 * 60));
+        const m = Math.floor((diff % (1000 * 60 * 60)) / (1000 * 60));
+        setTimeLeft(`${h}h ${m}m`);
+      }
+    };
+
+    updateTimer(); // Run immediately
+    const interval = setInterval(updateTimer, 60000); // Update every minute
+    return () => clearInterval(interval);
+  }, [expiry]);
+
+  if (!expiry || timeLeft === "Expired") return null;
+
+  return (
+    <TouchableOpacity
+      onPress={() => router.push("/paywall")}
+      activeOpacity={0.9}
+      style={{
+        marginHorizontal: 20,
+        marginBottom: 20, // Space below header
+        padding: 15,
+        borderRadius: 15,
+        backgroundColor: "#1A1A1A",
+        borderWidth: 1,
+        borderColor: Colors.premium.gold,
+        flexDirection: "row",
+        alignItems: "center",
+        justifyContent: "space-between",
+        shadowColor: Colors.premium.gold,
+        shadowOffset: { width: 0, height: 0 },
+        shadowOpacity: 0.4,
+        shadowRadius: 10,
+      }}
+    >
+      <View style={{ flexDirection: "row", alignItems: "center", gap: 12 }}>
+        <View
+          style={{
+            backgroundColor: Colors.premium.gold,
+            padding: 8,
+            borderRadius: 20,
+          }}
+        >
+          <Ionicons name="hourglass" size={20} color="#000" />
+        </View>
+        <View>
+          <Text
+            style={{
+              color: Colors.premium.gold,
+              fontWeight: "bold",
+              fontSize: 16,
+            }}
+          >
+            {timeLeft} Remaining
+          </Text>
+          <Text style={{ color: "#888", fontSize: 12 }}>
+            Enjoying premium? Lock it in before it’s gone
+          </Text>
+        </View>
+      </View>
+      <Ionicons name="chevron-forward" size={20} color={Colors.premium.gold} />
+    </TouchableOpacity>
+  );
+}
+
 // --- MAIN PROFILE SCREEN ---
 
 export default function ProfileScreen() {
   const router = useRouter();
   // ... existing state ...
   const [activeGalleryLevel, setActiveGalleryLevel] = useState<any>(null); // Controls the Modal
-  const { playTrackList, isPremium } = usePlayer(); // <--- FIX: Get Real Status from Global Context
+  const {
+    playTrackList,
+    isPremium,
+    subscriptionExpiry,
+    isLifetime,
+    showAlert,
+  } = usePlayer(); // <--- FIX: Get Real Status from Global Context
 
   // --- STATE ---
   const [loading, setLoading] = useState(true);
   const [displayName, setDisplayName] = useState("Soul"); // <--- FIX: Defaults to Soul instead of text "Loading..."
   const [userEmail, setUserEmail] = useState("");
+  // New State for Personal Details
+  const [hobby, setHobby] = useState("");
+  const [occupation, setOccupation] = useState("");
 
   // Stats
   const [stats, setStats] = useState({
@@ -453,12 +568,18 @@ export default function ProfileScreen() {
         // 1. Set Basic Info
         setDisplayName(data.full_name || user.email?.split("@")[0] || "Soul");
         setAvatarUrl(data.avatar_url);
+        // Load new details (if they exist)
+        setHobby(data.hobby || "");
+        setOccupation(data.occupation || "");
 
         // 2. RESTORED: Calculate Level Logic
         const mins = data.total_minutes || 0;
-        let currentLevel = "Sadhak";
-        if (mins > 100) currentLevel = "Yogi";
-        if (mins > 500) currentLevel = "Rishi";
+
+        // Find the highest level where user's minutes >= level.minMinutes
+        // We reverse the array to check from highest (Moksha) to lowest (Sadhak)
+        const currentLevelObj =
+          [...LEVELS].reverse().find((l) => mins >= l.minMinutes) || LEVELS[0];
+        const currentLevel = currentLevelObj.name;
 
         // 3. RESTORED: Update Screen Stats
         setStats({
@@ -495,27 +616,41 @@ export default function ProfileScreen() {
   }
 
   // --- ACTIONS ---
-  async function saveName() {
-    if (!newName.trim()) {
-      setIsEditing(false);
-      return;
-    }
+  async function saveDetails() {
     try {
       const {
         data: { user },
       } = await supabase.auth.getUser();
       if (user) {
-        await supabase
+        // Update all fields in Supabase
+        const { error } = await supabase
           .from("profiles")
-          .update({ full_name: newName })
+          .update({
+            full_name: displayName,
+            hobby: hobby,
+            occupation: occupation,
+          })
           .eq("id", user.id);
 
-        setDisplayName(newName); // Immediate UI update
+        if (error) throw error;
+
+        // Show Custom Glass Alert
+        showAlert({
+          title: "Profile Updated ✅",
+          message: "Your personal details have been saved successfully.",
+          icon: "checkmark-circle",
+          primaryText: "Great",
+        });
         setIsEditing(false);
-        Alert.alert("Updated", "Your spiritual identity has been changed.");
       }
     } catch (e) {
       console.log("Update failed", e);
+      showAlert({
+        title: "Error",
+        message: "Could not save details. Check your connection.",
+        icon: "alert-circle",
+        primaryText: "OK",
+      });
     }
   }
 
@@ -548,6 +683,35 @@ export default function ProfileScreen() {
     if (stats.minutes >= lvl.minMinutes) return idx;
     return acc;
   }, 0);
+
+  // --- NEW: CHECK FOR STREAK CELEBRATION (Runs every time you focus this tab) ---
+  useFocusEffect(
+    useCallback(() => {
+      checkStreakCelebration();
+    }, []),
+  );
+
+  async function checkStreakCelebration() {
+    try {
+      const streakVal = await AsyncStorage.getItem(
+        "streak_celebration_pending",
+      );
+      if (streakVal) {
+        // 1. Show the Celebration In-App Notification
+        showAlert({
+          title: "Streak Increased! 🔥",
+          message: `Incredible! You just reached a ${streakVal}-Day Streak!`,
+          icon: "flame",
+          primaryText: "Let's Go!",
+        });
+
+        // 2. Clear the flag immediately so it only shows ONCE
+        await AsyncStorage.removeItem("streak_celebration_pending");
+      }
+    } catch (e) {
+      console.log("Streak Check Error:", e);
+    }
+  }
 
   // --- RENDER ---
   return (
@@ -628,6 +792,10 @@ export default function ProfileScreen() {
               </View>
             </TouchableOpacity>
           </Animated.View>
+          {/* ✅ ONLY SHOW IF: Premium + Not Lifetime + Has Expiry Date */}
+          {isPremium && !isLifetime && subscriptionExpiry && (
+            <PremiumTimer expiry={subscriptionExpiry} router={router} />
+          )}
 
           {/* 3. GOLD STATS CARD */}
           <Animated.View
@@ -651,6 +819,60 @@ export default function ProfileScreen() {
                   <MaterialCommunityIcons name="crown" size={28} color="#FFF" />
                 </View>
               </View>
+
+              {/* --- SHOP BUTTON --- */}
+              <TouchableOpacity
+                onPress={() => router.push("/shop")}
+                style={{
+                  backgroundColor: "#1A1A1A",
+                  marginHorizontal: 20,
+                  marginTop: 20,
+                  padding: 15,
+                  borderRadius: 15,
+                  flexDirection: "row",
+                  alignItems: "center",
+                  justifyContent: "space-between",
+                  borderWidth: 1,
+                  borderColor: Colors.premium.gold,
+                }}
+              >
+                <View
+                  style={{
+                    flexDirection: "row",
+                    alignItems: "center",
+                    gap: 12,
+                  }}
+                >
+                  <View
+                    style={{
+                      backgroundColor: "rgba(255,215,0,0.1)",
+                      padding: 8,
+                      borderRadius: 20,
+                    }}
+                  >
+                    <Ionicons
+                      name="cart"
+                      size={20}
+                      color={Colors.premium.gold}
+                    />
+                  </View>
+                  <View>
+                    <Text
+                      style={{
+                        color: "#FFF",
+                        fontWeight: "bold",
+                        fontSize: 16,
+                      }}
+                    >
+                      Karma Store
+                    </Text>
+                    <Text style={{ color: "#888", fontSize: 12 }}>
+                      Spend points to unlock features
+                    </Text>
+                  </View>
+                </View>
+                <Ionicons name="chevron-forward" size={20} color="#666" />
+              </TouchableOpacity>
 
               <View style={styles.statsDivider} />
 
@@ -740,23 +962,35 @@ export default function ProfileScreen() {
             Preferences
           </Text>
 
+          {/* Premium Button */}
           <TouchableOpacity
-            style={styles.menuItem}
-            onPress={() => router.push("/paywall")}
+            style={[styles.menuItem, isPremium && { opacity: 0.7 }]}
+            onPress={() => !isPremium && router.push("/paywall")}
+            disabled={isPremium}
           >
             <View style={styles.menuLeft}>
               <Ionicons name="diamond" size={22} color={Colors.premium.gold} />
-              <Text style={[styles.menuText, { color: Colors.premium.gold }]}>
-                Premium Plan
-              </Text>
+              <View>
+                <Text style={[styles.menuText, { color: Colors.premium.gold }]}>
+                  {isPremium ? "Premium Active" : "Premium Plan"}
+                </Text>
+                {isPremium && (
+                  <Text style={{ color: "#666", fontSize: 10 }}>
+                    You are already a premium user
+                  </Text>
+                )}
+              </View>
             </View>
-            <Ionicons
-              name="chevron-forward"
-              size={18}
-              color={Colors.premium.gold}
-            />
+            {!isPremium && (
+              <Ionicons
+                name="chevron-forward"
+                size={18}
+                color={Colors.premium.gold}
+              />
+            )}
           </TouchableOpacity>
 
+          {/* Downloads Button (RESTORED) */}
           <TouchableOpacity
             style={styles.menuItem}
             onPress={() => router.push("/downloads")}
@@ -768,52 +1002,127 @@ export default function ProfileScreen() {
             <Ionicons name="chevron-forward" size={18} color="#666" />
           </TouchableOpacity>
 
-          {/* --- NEW ACCOUNT SETTINGS --- */}
+          {/* --- ACCOUNT SETTINGS --- */}
           <View style={{ marginTop: 20 }}>
-            <Text style={[styles.sectionTitle, { marginBottom: 10 }]}>
-              Account Settings
+            <Text style={[styles.sectionTitle, { marginBottom: 15 }]}>
+              Personal Details
             </Text>
 
-            <TouchableOpacity style={styles.menuItem}>
+            {/* 1. NAME INPUT */}
+            <View style={styles.menuItem}>
               <View style={styles.menuLeft}>
-                <Ionicons name="person-circle-outline" size={22} color="#fff" />
-                <Text style={styles.menuText}>Personal Details</Text>
-              </View>
-              <Ionicons name="chevron-forward" size={18} color="#666" />
-            </TouchableOpacity>
-
-            <TouchableOpacity style={styles.menuItem}>
-              <View style={styles.menuLeft}>
-                <Ionicons
-                  name="shield-checkmark-outline"
-                  size={22}
-                  color="#fff"
+                <Ionicons name="person-circle-outline" size={22} color="#888" />
+                <TextInput
+                  style={{ color: "#FFF", fontSize: 16, width: 200 }}
+                  placeholder="Your Name"
+                  placeholderTextColor="#555"
+                  value={displayName}
+                  onChangeText={setDisplayName}
                 />
-                <Text style={styles.menuText}>Privacy & Security</Text>
               </View>
-              <Ionicons name="chevron-forward" size={18} color="#666" />
-            </TouchableOpacity>
-
-            <TouchableOpacity style={styles.menuItem}>
-              <View style={styles.menuLeft}>
-                <Ionicons name="help-buoy-outline" size={22} color="#fff" />
-                <Text style={styles.menuText}>Help & Support</Text>
-              </View>
-              <Ionicons name="chevron-forward" size={18} color="#666" />
-            </TouchableOpacity>
-          </View>
-
-          <View style={styles.menuItem}>
-            <View style={styles.menuLeft}>
-              <Ionicons name="notifications-outline" size={22} color="#fff" />
-              <Text style={styles.menuText}>Daily Reminders</Text>
+              <Ionicons name="pencil" size={14} color="#333" />
             </View>
-            <Switch
-              value={true}
-              onValueChange={testNotification} // Connected your test function here
-              trackColor={{ false: "#333", true: Colors.premium.gold }}
-              thumbColor={"#fff"}
-            />
+
+            {/* 2. HOBBY INPUT */}
+            <View style={styles.menuItem}>
+              <View style={styles.menuLeft}>
+                <Ionicons name="bicycle-outline" size={22} color="#888" />
+                <TextInput
+                  style={{ color: "#FFF", fontSize: 16, width: 200 }}
+                  placeholder="Your Hobby (e.g. Yoga)"
+                  placeholderTextColor="#555"
+                  value={hobby}
+                  onChangeText={setHobby}
+                />
+              </View>
+              <Ionicons name="pencil" size={14} color="#333" />
+            </View>
+
+            {/* 3. OCCUPATION INPUT */}
+            <View style={styles.menuItem}>
+              <View style={styles.menuLeft}>
+                <Ionicons name="briefcase-outline" size={22} color="#888" />
+                <TextInput
+                  style={{ color: "#FFF", fontSize: 16, width: 200 }}
+                  placeholder="Occupation (e.g. Student)"
+                  placeholderTextColor="#555"
+                  value={occupation}
+                  onChangeText={setOccupation}
+                />
+              </View>
+              <Ionicons name="pencil" size={14} color="#333" />
+            </View>
+
+            {/* SAVE BUTTON */}
+            <TouchableOpacity
+              onPress={saveDetails}
+              style={{
+                backgroundColor: Colors.premium.gold,
+                padding: 12,
+                borderRadius: 12,
+                alignItems: "center",
+                marginBottom: 30,
+                marginTop: 5,
+              }}
+            >
+              <Text style={{ color: "#000", fontWeight: "bold" }}>
+                Save Details
+              </Text>
+            </TouchableOpacity>
+
+            {/* --- DANGER ZONE (RED BLOCK) --- */}
+            <Text
+              style={[
+                styles.sectionTitle,
+                { marginBottom: 10, color: "#FF453A" },
+              ]}
+            >
+              Danger Zone
+            </Text>
+
+            <TouchableOpacity
+              style={[
+                styles.menuItem,
+                {
+                  backgroundColor: "rgba(255, 69, 58, 0.1)", // Red Tint
+                  borderColor: "rgba(255, 69, 58, 0.3)", // Red Border
+                  borderWidth: 1,
+                },
+              ]}
+              onPress={() => {
+                // USE WEBSITE THEME ALERT (Not Baby School Style)
+                showAlert({
+                  title: "Delete Account?",
+                  message:
+                    "Are you sure? This will delete your progress, karma, and data PERMANENTLY.",
+                  icon: "warning",
+                  primaryText: "DELETE",
+                  onPrimaryPress: async () => {
+                    // Secure Delete Logic
+                    const {
+                      data: { user },
+                    } = await supabase.auth.getUser();
+                    if (user) {
+                      await supabase
+                        .from("profiles")
+                        .delete()
+                        .eq("id", user.id);
+                      await supabase.auth.signOut();
+                      router.replace("/auth");
+                    }
+                  },
+                  secondaryText: "Cancel",
+                });
+              }}
+            >
+              <View style={styles.menuLeft}>
+                <Ionicons name="trash-outline" size={22} color="#FF453A" />
+                <Text style={[styles.menuText, { color: "#FF453A" }]}>
+                  Delete Account
+                </Text>
+              </View>
+              <Ionicons name="chevron-forward" size={18} color="#FF453A" />
+            </TouchableOpacity>
           </View>
 
           <TouchableOpacity onPress={handleLogout} style={styles.logoutBtn}>

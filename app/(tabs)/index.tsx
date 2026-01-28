@@ -1,8 +1,12 @@
 import { Colors } from "@/constants/theme";
 import { Ionicons } from "@expo/vector-icons";
+import AsyncStorage from "@react-native-async-storage/async-storage";
 import { useRouter } from "expo-router";
 import React, { useEffect, useState } from "react";
 import {
+  Alert, // <--- Add this
+  Dimensions,
+  FlatList,
   Image,
   ScrollView,
   Share,
@@ -14,6 +18,7 @@ import {
 import { usePlayer } from "../../app/PlayerContext";
 import { supabase } from "../../supabaseConfig";
 // Add these to your imports
+import { Video } from "expo-av";
 import { BlurView } from "expo-blur";
 import { LinearGradient } from "expo-linear-gradient";
 import { useFocusEffect } from "expo-router";
@@ -29,9 +34,16 @@ import Animated, {
   withTiming,
 } from "react-native-reanimated";
 
+const { width: SCREEN_WIDTH } = Dimensions.get("window");
+const CARD_WIDTH = SCREEN_WIDTH - 40; // Makes the card fit the screen minus padding
+
 export default function HomeScreen() {
+  const [moods, setMoods] = useState<any[]>([]);
+  const [videos, setVideos] = useState<any[]>([]);
   const router = useRouter();
-  const { playTrackList, toggleFavorite, likedTrackIds } = usePlayer();
+  // 1. Get currentTrack to check if player is active
+  const { playTrackList, toggleFavorite, likedTrackIds, currentTrack } =
+    usePlayer();
   // Animation Trigger
   const [triggerKey, setTriggerKey] = useState(0);
 
@@ -39,7 +51,20 @@ export default function HomeScreen() {
   const [dynamicQuotes, setDynamicQuotes] = useState([
     { text: "Loading wisdom...", author: "" },
   ]);
-  const [spotlight, setSpotlight] = useState<any>(null); // <--- For the Spotlight Card
+  const [spotlights, setSpotlights] = useState<any[]>([]); // Change to array
+  const flatListRef = React.useRef<FlatList>(null); // To control the scroll
+  const [activeIndex, setActiveIndex] = useState(0); // To track current slide
+  const [quotes, setQuotes] = useState<any[]>([]);
+
+  useEffect(() => {
+    if (spotlights.length <= 1) return;
+
+    const interval = setInterval(() => {
+      setActiveIndex((prev) => (prev + 1) % spotlights.length);
+    }, 5000); // Rotate every 5 seconds automatically
+
+    return () => clearInterval(interval);
+  }, [spotlights.length]);
 
   // Re-trigger animation on Focus
   useFocusEffect(
@@ -60,6 +85,15 @@ export default function HomeScreen() {
 
   const todaysQuote = dynamicQuotes[currentQuoteIndex] || dynamicQuotes[0];
   const [streak, setStreak] = useState(0);
+  // --- NEW: Daily Mission State ---
+  const [missionCompleted, setMissionCompleted] = useState(false);
+
+  // REPLACE "const dailyTask = ..." WITH THIS:
+  const [activeMission, setActiveMission] = useState({
+    title: "TODAY'S SANKALP",
+    task: "Loading mission...",
+    audio_id: null,
+  });
   const [loading, setLoading] = useState(true);
   const [userName, setUserName] = useState("Friend");
   const [greeting, setGreeting] = useState("Good Morning,"); // <--- NEW STATE
@@ -81,6 +115,67 @@ export default function HomeScreen() {
     }, []),
   );
 
+  async function startDailyMission() {
+    try {
+      setLoading(true);
+      let tracksToPlay = [];
+
+      // A. If Admin set a specific song, play that
+      if (activeMission.audio_id) {
+        const { data: specificTrack } = await supabase
+          .from("audios")
+          .select("*")
+          .eq("id", activeMission.audio_id)
+          .single();
+        if (specificTrack) tracksToPlay = [specificTrack];
+      }
+
+      // B. Fallback: If no specific song, find a "Morning" track
+      if (tracksToPlay.length === 0) {
+        const { data: morningTracks } = await supabase
+          .from("audios")
+          .select("*")
+          .ilike("title", "%morning%")
+          .limit(5);
+        tracksToPlay = morningTracks || [];
+      }
+
+      // C. Ultimate Fallback
+      if (tracksToPlay.length === 0) {
+        const { data: anyTracks } = await supabase
+          .from("audios")
+          .select("*")
+          .limit(5);
+        tracksToPlay = anyTracks || [];
+      }
+
+      if (tracksToPlay.length > 0) {
+        // Format for player AND ADD THE MISSION FLAG
+        const formatted = tracksToPlay.map((t) => ({
+          id: t.id,
+          url: t.audio_url,
+          title: t.title,
+          artist: "Daily Mission",
+          artwork: t.image_url || "https://via.placeholder.com/300",
+          duration: t.duration_sec,
+          isMission: true, // <--- CRITICAL: Tells PlayerContext to award +50 points on finish
+        }));
+
+        await playTrackList(formatted, 0);
+        router.push("/player");
+
+        // Removed: setMissionCompleted(true) and DB update
+        // We now let the PlayerContext handle the reward when the song actually finishes.
+      } else {
+        Alert.alert("No Content", "No audio found for this mission.");
+      }
+    } catch (e) {
+      console.log("Mission Error:", e);
+    } finally {
+      setLoading(false);
+    }
+  }
+
   async function fetchUserData() {
     try {
       // 1. Fetch User Profile
@@ -100,32 +195,88 @@ export default function HomeScreen() {
         }
       }
 
-      // 2. Fetch Dynamic Quotes
-      const { data: quoteData } = await supabase
-        .from("home_quotes")
-        .select("text, author")
-        .eq("is_active", true);
+      // 2. FIXED: Fetch ALL Quotes for TODAY (So they can rotate)
+      const today = new Date().toISOString().split("T")[0];
 
-      if (quoteData && quoteData.length > 0) {
-        setDynamicQuotes(quoteData);
+      const { data: q } = await supabase
+        .from("home_quotes")
+        .select("*")
+        .eq("is_active", true)
+        .eq("display_date", today); // <--- REMOVED .limit(1)
+
+      // Fallback: If no quote is set for today, fetch the latest 5
+      if (!q || q.length === 0) {
+        const { data: latest } = await supabase
+          .from("home_quotes")
+          .select("*")
+          .eq("is_active", true)
+          .order("created_at", { ascending: false })
+          .limit(5); // Fallback to last 5
+
+        if (latest) setDynamicQuotes(latest);
+      } else {
+        setDynamicQuotes(q);
       }
 
-      // 3. Fetch Active Spotlight
+      // 3. Fetch All Active Spotlights
       const { data: spotlightData } = await supabase
         .from("home_spotlights")
         .select("*")
-        .eq("is_active", true)
-        .single();
+        .eq("is_active", true);
 
       if (spotlightData) {
-        setSpotlight(spotlightData);
+        setSpotlights(spotlightData);
       }
+
+      // 4. NEW: Fetch Today's Mission from DB
+      const { data: missionData } = await supabase
+        .from("daily_missions")
+        .select("*")
+        .eq("display_date", today)
+        .limit(1) // Ensure we only get one
+        .single();
+
+      if (missionData) {
+        setActiveMission({
+          title: missionData.title || "TODAY'S SANKALP",
+          task: missionData.task_label,
+          audio_id: missionData.linked_audio_id,
+        });
+      } else {
+        // Fallback if nothing is in DB for today
+        setActiveMission({
+          title: "TODAY'S SANKALP",
+          task: "Listen to 'Morning Boost' for 5 mins",
+          audio_id: null,
+        });
+      }
+
+      // 5. CHECK IF MISSION COMPLETED LOCALLY (Fixes the Green UI issue)
+      const storedDate = await AsyncStorage.getItem("mission_completed_date");
+      if (storedDate === today) {
+        setMissionCompleted(true);
+      }
+
+      // 6. Fetch Moods
+      const { data: moodData } = await supabase
+        .from("home_moods")
+        .select("*")
+        .eq("is_active", true);
+      if (moodData) setMoods(moodData);
+
+      // 7. Fetch Videos
+      const { data: vidData } = await supabase
+        .from("home_videos")
+        .select("*")
+        .eq("is_active", true)
+        .order("created_at", { ascending: false });
+      if (vidData) setVideos(vidData);
     } catch (e) {
-      console.log(e);
+      console.log("Fetch Error:", e);
     } finally {
       setLoading(false);
     }
-  }
+  } // <--- ADD THIS CLOSING BRACE
 
   const handleShareQuote = async () => {
     try {
@@ -150,16 +301,51 @@ export default function HomeScreen() {
 
   return (
     <View style={styles.container}>
-      {/* ScrollView key={triggerKey} ensures animation replay on focus */}
-      <ScrollView
-        key={triggerKey} // This forces the animations to replay on focus
-        contentContainerStyle={{ paddingBottom: 100 }}
+      {/* 1. FIXED HEADER (First child = Top of screen) */}
+      <View
+        style={{
+          position: "absolute",
+          top: 50, // Adjusts for status bar
+          left: 20,
+          right: 20,
+          zIndex: 100, // Forces it above everything
+          flexDirection: "row",
+          alignItems: "center",
+          justifyContent: "space-between",
+        }}
       >
+        {/* Back Button Removed for Home */}
+        <View style={{ width: 45 }} />
+        <TouchableOpacity onPress={() => router.push("/profile")}>
+          <Image
+            source={{ uri: "https://api.dicebear.com/9.x/micah/png?seed=Soul" }}
+            style={{
+              width: 40,
+              height: 40,
+              borderRadius: 20,
+              borderWidth: 1,
+              borderColor: Colors.premium.gold,
+            }}
+          />
+        </TouchableOpacity>
+      </View>
+
+      {/* 2. SCROLLABLE CONTENT */}
+      <ScrollView
+        showsVerticalScrollIndicator={false}
+        contentContainerStyle={{
+          paddingBottom: currentTrack ? 200 : 150, // Extra space for Tabs + Player
+          paddingTop: 100, // Pushes content down so it starts BELOW the header
+        }}
+      >
+        {/* ... (Your existing greeting, stats, quotes, etc. go here - NO CHANGES NEEDED inside ScrollView) ... */}
+
         {/* HEADER: Greeting & Streak */}
         <Animated.View
           entering={FadeInDown.delay(200).springify()}
           style={styles.header}
         >
+          {/* ... existing header content ... */}
           <View>
             <Text style={styles.greeting}>{greeting}</Text>
             <Text style={styles.username}>{userName}</Text>
@@ -170,12 +356,13 @@ export default function HomeScreen() {
           </BlurView>
         </Animated.View>
 
+        {/* ... Rest of your ScrollView content ... */}
+
         {/* HERO CARD: Daily Quote */}
-        {/* LIVING GRADIENT QUOTE CARD */}
         <Animated.View entering={FadeInDown.delay(400).springify()}>
           <Text style={styles.sectionTitle}>Daily Wisdom</Text>
 
-          <AnimatedGradientCard>
+          <AnimatedGradientCard imageUrl={todaysQuote.image_url}>
             <Ionicons
               //name="sparkles"
               size={30}
@@ -207,48 +394,180 @@ export default function HomeScreen() {
           </AnimatedGradientCard>
         </Animated.View>
 
+        {/* 🎯 DAILY SANKALP (MISSION) */}
+        <Animated.View
+          entering={FadeInDown.delay(500).springify()}
+          style={styles.missionWrapper}
+        >
+          <LinearGradient
+            colors={
+              missionCompleted
+                ? ["#0f9b0f", "#000"]
+                : [Colors.premium.gold, "#B8860B"]
+            }
+            start={{ x: 0, y: 0 }}
+            end={{ x: 1, y: 1 }}
+            style={styles.missionBorder}
+          >
+            <View style={styles.missionCard}>
+              <View style={styles.missionRow}>
+                <View style={styles.missionIcon}>
+                  <Ionicons
+                    name={
+                      missionCompleted
+                        ? "checkmark-circle"
+                        : "scan-circle-outline"
+                    }
+                    size={24}
+                    color={missionCompleted ? "#4ADE80" : Colors.premium.gold}
+                  />
+                </View>
+                <View style={{ flex: 1 }}>
+                  {/* Dynamic Title */}
+                  <Text style={styles.missionLabel}>{activeMission.title}</Text>
+
+                  {/* FIX: Show Hinglish Message if Completed */}
+                  <Text
+                    style={[
+                      styles.missionTitle,
+                      missionCompleted && {
+                        color: "#4ADE80",
+                        fontStyle: "italic",
+                      },
+                    ]}
+                  >
+                    {missionCompleted
+                      ? "Mission Complete! Kal aana for more points. ✨"
+                      : activeMission.task}
+                  </Text>
+                </View>
+
+                {!missionCompleted && (
+                  <TouchableOpacity
+                    style={styles.claimBtn}
+                    onPress={startDailyMission} // <--- CALL THE NEW FUNCTION
+                  >
+                    <Text style={styles.claimText}>Start</Text>
+                  </TouchableOpacity>
+                )}
+              </View>
+
+              {/* Reward Badge */}
+              {missionCompleted && (
+                <View style={styles.rewardRow}>
+                  <Text
+                    style={{
+                      color: "#4ADE80",
+                      fontSize: 12,
+                      fontWeight: "bold",
+                    }}
+                  >
+                    +50 Karma Earned
+                  </Text>
+                </View>
+              )}
+            </View>
+          </LinearGradient>
+        </Animated.View>
+
         {/* ACTION: Start Morning Boost */}
         {/* 🔥 SPOTLIGHT SECTION */}
-        {/* 🔥 DYNAMIC SPOTLIGHT SECTION */}
-        {spotlight && (
-          <Animated.View
-            entering={FadeInDown.delay(500).springify().damping(12)}
-            style={{ marginTop: 10, marginBottom: 30 }}
-          >
-            <Text style={styles.sectionTitle}>Spotlight Insight 💡</Text>
-            <TouchableOpacity
-              activeOpacity={0.9}
-              onPress={() => {
-                // If linked to audio, navigate to player
-                if (spotlight.audio_url || spotlight.linked_audio_id) {
-                  router.push("/player");
-                }
-              }}
-              style={styles.spotlightCard}
+        {/* 🔥 ROTATING SINGLE WINDOW */}
+        <View style={{ marginBottom: 30 }}>
+          <Text style={styles.sectionTitle}>Spotlight Insights 💡</Text>
+          {spotlights.length > 0 && (
+            <Animated.View
+              key={`spotlight-${activeIndex}`} // This triggers the bouncy animation on change
+              entering={FadeInDown.springify().damping(12).mass(1)}
+              style={{ width: CARD_WIDTH, alignSelf: "center" }}
             >
-              <Image
-                source={{ uri: spotlight.image_url }}
-                style={styles.spotlightImage}
-              />
-
-              <LinearGradient
-                colors={["transparent", "rgba(0,0,0,0.9)"]}
-                style={styles.spotlightOverlay}
+              <TouchableOpacity
+                activeOpacity={0.9}
+                onPress={async () => {
+                  const item = spotlights[activeIndex];
+                  if (item.linked_audio_id) {
+                    const { data } = await supabase
+                      .from("audios")
+                      .select("*")
+                      .eq("id", item.linked_audio_id)
+                      .single();
+                    if (data && data.url) {
+                      await playTrackList([data], 0);
+                      router.push("/player");
+                    }
+                  } else if (item.audio_url && item.audio_url.trim() !== "") {
+                    await playTrackList(
+                      [
+                        {
+                          ...item,
+                          title: item.title,
+                          url: item.audio_url,
+                          image_url: item.image_url,
+                        },
+                      ],
+                      0,
+                    );
+                    router.push("/player");
+                  }
+                }}
+                style={styles.spotlightCard}
               >
-                <View style={styles.spotlightTagContainer}>
-                  <Text style={styles.spotlightTag}>FEATURED</Text>
-                </View>
-                <Text style={styles.spotlightTitle}>{spotlight.title}</Text>
-                <Text style={styles.spotlightSub}>{spotlight.subtitle}</Text>
+                {spotlights[activeIndex].video_url ? (
+                  <Video
+                    source={{ uri: spotlights[activeIndex].video_url }}
+                    style={styles.spotlightImage}
+                    resizeMode="cover"
+                    shouldPlay
+                    isLooping
+                    isMuted
+                    usePoster
+                    posterSource={{ uri: spotlights[activeIndex].image_url }}
+                  />
+                ) : (
+                  <Image
+                    source={{
+                      uri: spotlights[activeIndex].image_url
+                        ? spotlights[activeIndex].image_url
+                        : "https://images.unsplash.com/photo-1506126613408-eca07ce68773?q=80&w=1000&auto=format&fit=crop", // Default "Zen" Image
+                    }}
+                    style={styles.spotlightImage}
+                  />
+                )}
+                <LinearGradient
+                  colors={["transparent", "rgba(0,0,0,0.9)"]}
+                  style={styles.spotlightOverlay}
+                >
+                  <View style={styles.spotlightTagContainer}>
+                    <Text style={styles.spotlightTag}>FEATURED</Text>
+                  </View>
+                  <Text style={styles.spotlightTitle}>
+                    {spotlights[activeIndex].title}
+                  </Text>
+                  <Text style={styles.spotlightSub}>
+                    {spotlights[activeIndex].subtitle}
+                  </Text>
+                  <View style={styles.playCapsule}>
+                    <Ionicons name="play" size={16} color="#000" />
+                    <Text style={styles.playText}>Listen Now</Text>
+                  </View>
+                </LinearGradient>
+              </TouchableOpacity>
+            </Animated.View>
+          )}
 
-                <View style={styles.playCapsule}>
-                  <Ionicons name="play" size={16} color="#000" />
-                  <Text style={styles.playText}>Listen Now</Text>
-                </View>
-              </LinearGradient>
-            </TouchableOpacity>
-          </Animated.View>
-        )}
+          {/* 🔘 PAGINATION DOTS */}
+          <View style={styles.paginationContainer}>
+            {spotlights.map((_, index) => (
+              <View
+                key={index}
+                style={[
+                  styles.dot,
+                  activeIndex === index ? styles.activeDot : styles.inactiveDot,
+                ]}
+              />
+            ))}
+          </View>
+        </View>
         {/* MOOD CHECK-IN */}
         <Animated.View entering={FadeInDown.delay(600).springify()}>
           <Text style={styles.sectionTitle}>How are you feeling?</Text>
@@ -257,51 +576,33 @@ export default function HomeScreen() {
             showsHorizontalScrollIndicator={false}
             style={{ marginBottom: 30 }}
           >
-            {/* Quick Mood Chips */}
-            <MoodChip
-              label="Stressed"
-              icon="thunderstorm"
-              color="#FF6B6B"
-              onPress={() =>
-                router.push({
-                  pathname: "/(tabs)/playlist",
-                  params: { categoryId: 1, categoryName: "Anxiety Relief" },
-                })
-              }
-            />
-            <MoodChip
-              label="Tired"
-              icon="battery-dead"
-              color="#546E7A"
-              onPress={() =>
-                router.push({
-                  pathname: "/(tabs)/playlist",
-                  params: { categoryId: 3, categoryName: "Morning Energy" },
-                })
-              }
-            />
-            <MoodChip
-              label="Anxious"
-              icon="water"
-              color="#48dbfb"
-              onPress={() =>
-                router.push({
-                  pathname: "/(tabs)/playlist",
-                  params: { categoryId: 1, categoryName: "Anxiety Relief" },
-                })
-              }
-            />
-            <MoodChip
-              label="Sad"
-              icon="cloud"
-              color="#a29bfe"
-              onPress={() =>
-                router.push({
-                  pathname: "/(tabs)/playlist",
-                  params: { categoryId: 8, categoryName: "Broken Heart" },
-                })
-              }
-            />
+            {moods.length > 0 ? (
+              moods.map((m, i) => (
+                <MoodChip
+                  key={i}
+                  label={m.label}
+                  icon={m.icon}
+                  color={m.color}
+                  onPress={() => {
+                    if (m.linked_category_id) {
+                      // ✅ FIX: Send ONLY the ID. Let the Playlist page fetch the correct name.
+                      router.push({
+                        pathname: "/(tabs)/playlist",
+                        params: {
+                          categoryId: m.linked_category_id,
+                        },
+                      });
+                    } else {
+                      router.push("/(tabs)/explore");
+                    }
+                  }}
+                />
+              ))
+            ) : (
+              <Text style={{ color: "#666", marginLeft: 20 }}>
+                Loading moods...
+              </Text>
+            )}
           </ScrollView>
         </Animated.View>
 
@@ -311,27 +612,69 @@ export default function HomeScreen() {
           entering={FadeInDown.delay(700).springify().damping(12)}
           style={{ marginBottom: 30 }}
         >
-          <Text style={styles.sectionTitle}>Short on Time? ⚡</Text>
-          <ScrollView horizontal showsHorizontalScrollIndicator={false}>
-            {[
-              { title: "Instant Calm", time: "2 min", color: "#48dbfb" },
-              { title: "Focus Now", time: "4 min", color: "#ff9f43" },
-              { title: "Sleep Prep", time: "5 min", color: "#5f27cd" },
-              { title: "Ego Check", time: "3 min", color: "#ff6b6b" },
-            ].map((item, index) => (
-              <TouchableOpacity key={index} style={styles.quickCard}>
-                <View
-                  style={[styles.quickIcon, { backgroundColor: item.color }]}
-                >
-                  <Ionicons name="play" size={14} color="#fff" />
-                </View>
-                <View>
-                  <Text style={styles.quickTitle}>{item.title}</Text>
-                  <Text style={styles.quickTime}>{item.time}</Text>
-                </View>
-              </TouchableOpacity>
-            ))}
-          </ScrollView>
+          {/* 🎬 SHORT VIDEOS SECTION */}
+          {videos.length > 0 && (
+            <Animated.View
+              entering={FadeInDown.delay(650).springify()}
+              style={{ marginBottom: 30 }}
+            >
+              <Text style={styles.sectionTitle}>Daily Shorts 🎬</Text>
+              <ScrollView
+                horizontal
+                showsHorizontalScrollIndicator={false}
+                contentContainerStyle={{ gap: 15, paddingRight: 20 }}
+              >
+                {videos.map((v, index) => (
+                  <TouchableOpacity
+                    key={index}
+                    style={{
+                      width: 140,
+                      height: 220,
+                      borderRadius: 15,
+                      overflow: "hidden",
+                      backgroundColor: "#000",
+                    }}
+                    onPress={() => {
+                      // Play video in full screen player or custom modal
+                      // For now, we reuse the player but we need a video player screen.
+                      // Simplest: Just play the audio if it's music, or use a modal.
+                      // Assuming basic video play:
+                      router.push({
+                        pathname: "/modal",
+                        params: { videoUrl: v.video_url },
+                      }); // You need a modal screen for this
+                      // OR just Alert for now if you don't have a video player screen ready
+                      // Alert.alert("Play Video", "Video player implementation needed.");
+                    }}
+                  >
+                    <Image
+                      source={{
+                        uri:
+                          v.thumbnail_url || "https://via.placeholder.com/150",
+                      }}
+                      style={{ width: "100%", height: "100%" }}
+                    />
+                    <View
+                      style={{ position: "absolute", bottom: 10, left: 10 }}
+                    >
+                      <Ionicons name="play-circle" size={30} color="#FFF" />
+                      <Text
+                        style={{
+                          color: "#FFF",
+                          fontSize: 12,
+                          fontWeight: "bold",
+                          width: 120,
+                        }}
+                        numberOfLines={1}
+                      >
+                        {v.title}
+                      </Text>
+                    </View>
+                  </TouchableOpacity>
+                ))}
+              </ScrollView>
+            </Animated.View>
+          )}
         </Animated.View>
 
         {/* SHORTCUTS: Categories (Now Bouncy) */}
@@ -423,15 +766,15 @@ function ShimmerEffect() {
 }
 
 // 2. Animated Gradient Card (The Chameleon Crossfade Fix) 🦎
-function AnimatedGradientCard({ children }) {
+// 2. Animated Gradient Card (Now with Image Support) 🦎
+function AnimatedGradientCard({ children, imageUrl }) {
   const opacity = useSharedValue(0);
 
   useEffect(() => {
-    // Fade up and down continuously over 6 seconds
     opacity.value = withRepeat(
       withTiming(1, { duration: 6000, easing: Easing.linear }),
       -1,
-      true, // Reverse: 0 -> 1 -> 0
+      true,
     );
   }, []);
 
@@ -441,23 +784,41 @@ function AnimatedGradientCard({ children }) {
 
   return (
     <View style={styles.glassCard}>
-      {/* LAYER 1: Base Gradient (Purple/Pink) - Always Visible */}
-      <LinearGradient
-        colors={["#8E2DE2", "#4A00E0"]}
-        style={StyleSheet.absoluteFill}
-        start={{ x: 0, y: 0 }}
-        end={{ x: 1, y: 1 }}
-      />
-
-      {/* LAYER 2: Overlay Gradient (Cyan/Blue) - Fades In & Out */}
-      <Animated.View style={[StyleSheet.absoluteFill, animatedStyle]}>
-        <LinearGradient
-          colors={["#00c6ff", "#0072ff"]}
-          style={StyleSheet.absoluteFill}
-          start={{ x: 0, y: 0 }}
-          end={{ x: 1, y: 1 }}
-        />
-      </Animated.View>
+      {imageUrl ? (
+        // --- OPTION A: BACKGROUND IMAGE ---
+        <>
+          <Image
+            source={{ uri: imageUrl }}
+            style={StyleSheet.absoluteFill}
+            resizeMode="cover"
+          />
+          {/* Dark Overlay (Adjust opacity 0.5 for readability) */}
+          <View
+            style={[
+              StyleSheet.absoluteFill,
+              { backgroundColor: "rgba(0,0,0,0.5)" },
+            ]}
+          />
+        </>
+      ) : (
+        // --- OPTION B: CHAMELEON GRADIENT (Fallback) ---
+        <>
+          <LinearGradient
+            colors={["#8E2DE2", "#4A00E0"]}
+            style={StyleSheet.absoluteFill}
+            start={{ x: 0, y: 0 }}
+            end={{ x: 1, y: 1 }}
+          />
+          <Animated.View style={[StyleSheet.absoluteFill, animatedStyle]}>
+            <LinearGradient
+              colors={["#00c6ff", "#0072ff"]}
+              style={StyleSheet.absoluteFill}
+              start={{ x: 0, y: 0 }}
+              end={{ x: 1, y: 1 }}
+            />
+          </Animated.View>
+        </>
+      )}
 
       {/* Content sits on top */}
       <View style={{ zIndex: 10 }}>{children}</View>
@@ -531,14 +892,11 @@ const styles = StyleSheet.create({
     opacity: 0.7,
     textAlign: "right",
   },
-  quoteActions: { flexDirection: "row", marginTop: 20, gap: 15 },
-  actionBtn: {
+  quoteActions: {
     flexDirection: "row",
-    alignItems: "center",
-    backgroundColor: "rgba(255,255,255,0.3)",
-    paddingHorizontal: 12,
-    paddingVertical: 8,
-    borderRadius: 20,
+    marginTop: 15, // Reduced from 20
+    justifyContent: "center",
+    gap: 10,
   },
   actionText: { color: "#000", fontWeight: "600", marginLeft: 5, fontSize: 12 },
 
@@ -595,27 +953,33 @@ const styles = StyleSheet.create({
     backgroundColor: "rgba(255,255,255,0.1)",
   },
   glassCard: {
-    padding: 25,
-    borderRadius: 24,
-    marginBottom: 30,
+    padding: 15, // Reduced padding
+    borderRadius: 15, // Sharper corners (more rectangular)
+    marginBottom: 20,
     overflow: "hidden",
     borderWidth: 1,
-    borderColor: "rgba(255,255,255,0.1)",
+    borderColor: "rgba(255,255,255,0.15)",
+    minHeight: 130, // Reduced height (was 180)
+    justifyContent: "center",
   },
   quoteText: {
-    fontSize: 22,
+    fontSize: 18, // Smaller font to fit
     fontWeight: "700",
-    color: "#fff", // White text looks better on glass
-    marginTop: 20,
-    lineHeight: 32,
+    color: "#fff",
+    marginTop: 10,
+    lineHeight: 24,
     fontStyle: "italic",
+    textAlign: "center",
+    textShadowColor: "rgba(0,0,0,0.5)", // Shadow helps read over images
+    textShadowOffset: { width: 0, height: 1 },
+    textShadowRadius: 4,
   },
   quoteAuthor: {
-    fontSize: 14,
+    fontSize: 12,
     fontWeight: "600",
-    color: "rgba(255,255,255,0.6)",
-    marginTop: 15,
-    textAlign: "right",
+    color: "rgba(255,255,255,0.8)",
+    marginTop: 6,
+    textAlign: "center",
   },
   actionGlassBtn: {
     flexDirection: "row",
@@ -651,15 +1015,17 @@ const styles = StyleSheet.create({
   spotlightImage: {
     width: "100%",
     height: "100%",
+    position: "absolute", // Ensures video stays in background
   },
   spotlightOverlay: {
     position: "absolute",
     bottom: 0,
     left: 0,
     right: 0,
-    height: "60%",
+    height: "70%",
     justifyContent: "flex-end",
     padding: 25,
+    zIndex: 10, // Forces text to the front
   },
   spotlightTagContainer: {
     backgroundColor: "#D4AF37", // Gold
@@ -733,7 +1099,81 @@ const styles = StyleSheet.create({
     fontSize: 12,
     marginTop: 2,
   },
+  // PAGINATION DOT STYLES
+  paginationContainer: {
+    flexDirection: "row",
+    justifyContent: "center",
+    alignItems: "center",
+    marginTop: 15,
+    gap: 8,
+  },
+  dot: {
+    height: 6,
+    borderRadius: 3,
+  },
+  activeDot: {
+    backgroundColor: "#fff",
+    width: 20, // Longer dot for the active item
+  },
+  inactiveDot: {
+    backgroundColor: "rgba(255, 255, 255, 0.2)",
+    width: 6,
+  },
   moodText: { color: "#fff", fontWeight: "700", marginLeft: 8 },
 
   catLabel: { fontSize: 12, fontWeight: "bold", marginTop: 5 },
+  // --- NEW MISSION STYLES ---
+  missionWrapper: {
+    marginBottom: 30,
+    paddingHorizontal: 5, // Slight indent
+  },
+  missionBorder: {
+    borderRadius: 20,
+    padding: 1.5, // Creates the Gold Border effect
+  },
+  missionCard: {
+    backgroundColor: "#121212", // Inner dark bg
+    borderRadius: 19,
+    padding: 15,
+  },
+  missionRow: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 15,
+  },
+  missionIcon: {
+    width: 40,
+    height: 40,
+    borderRadius: 20,
+    backgroundColor: "rgba(255,255,255,0.1)",
+    justifyContent: "center",
+    alignItems: "center",
+  },
+  missionLabel: {
+    color: "#888",
+    fontSize: 10,
+    fontWeight: "bold",
+    letterSpacing: 1,
+    marginBottom: 2,
+  },
+  missionTitle: {
+    color: "#FFF",
+    fontSize: 14,
+    fontWeight: "700",
+  },
+  claimBtn: {
+    backgroundColor: "rgba(255,255,255,0.1)",
+    paddingHorizontal: 15,
+    paddingVertical: 8,
+    borderRadius: 20,
+  },
+  claimText: {
+    color: "#FFF",
+    fontSize: 12,
+    fontWeight: "bold",
+  },
+  rewardRow: {
+    marginTop: 10,
+    alignItems: "flex-end",
+  },
 });

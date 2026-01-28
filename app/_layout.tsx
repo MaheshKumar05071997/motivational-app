@@ -7,19 +7,23 @@ import {
   Theme,
   ThemeProvider,
 } from "@react-navigation/native";
+import Constants from "expo-constants";
 import * as Device from "expo-device";
+import * as Linking from "expo-linking"; // <--- Add this
 import * as Notifications from "expo-notifications";
 import { Stack, usePathname, useRouter, useSegments } from "expo-router";
 import { useEffect, useState } from "react";
-import { ActivityIndicator, Platform, Text, View } from "react-native";
+import { ActivityIndicator, Alert, Platform, Text, View } from "react-native";
 import Animated, { FadeInDown, FadeOutUp } from "react-native-reanimated"; // <--- ANIMATIONS
 import LiveBackground from "../components/LiveBackground";
 import { supabase } from "../supabaseConfig";
 
 // Contexts & Components
+import CustomAlert from "../components/CustomAlert";
 import MiniPlayer from "../components/MiniPlayer";
 import { PlayerProvider, usePlayer } from "./PlayerContext"; // <--- ADD usePlayer
 
+// FIX: Force the notification to show even when the app is open
 Notifications.setNotificationHandler({
   handleNotification: async () => ({
     shouldShowAlert: true,
@@ -63,13 +67,63 @@ export default function RootLayout() {
       data: { subscription },
     } = supabase.auth.onAuthStateChange((_event, session) => {
       setSession(session);
+      if (session) {
+        // FIX: Only register when we have a logged-in user!
+        registerNotifications();
+      }
     });
-
-    // Trigger Notification Setup
-    registerNotifications();
 
     return () => subscription.unsubscribe();
   }, []);
+
+  // ... inside RootLayout function ...
+
+  // --- FIX: LISTEN FOR GOOGLE LOGIN REDIRECT ---
+  useEffect(() => {
+    const handleDeepLink = async (event: { url: string }) => {
+      let { url } = event;
+      console.log("🔗 Incoming Deep Link:", url);
+
+      // 1. Fix the URL format if needed
+      if (url.includes("#") && !url.includes("?")) {
+        url = url.replace("#", "?");
+      }
+
+      // 2. Parse the URL
+      const { queryParams } = Linking.parse(url);
+      const access_token = queryParams?.access_token as string;
+      const refresh_token = queryParams?.refresh_token as string;
+
+      // 3. Login
+      if (access_token && refresh_token) {
+        const { error } = await supabase.auth.setSession({
+          access_token,
+          refresh_token,
+        });
+        if (error) {
+          console.error("❌ Session Error:", error);
+        } else {
+          console.log("✅ Google Login Successful!");
+          // Force navigation to Tabs if not already there
+          router.replace("/(tabs)");
+        }
+      }
+    };
+
+    // A. Check if app was opened by the link (Cold Start)
+    Linking.getInitialURL().then((url) => {
+      if (url) handleDeepLink({ url });
+    });
+
+    // B. Listen for new links while app is running (Warm Switch)
+    const subscription = Linking.addEventListener("url", handleDeepLink);
+
+    return () => {
+      subscription.remove();
+    };
+  }, []);
+
+  // ... rest of your code ...
 
   useEffect(() => {
     if (!isReady) return;
@@ -94,8 +148,13 @@ export default function RootLayout() {
   }, [isReady, session, isFirstLaunch]);
 
   async function registerNotifications() {
+    // 0. FIX: STOP IF EXPO GO (It crashes SDK 53)
+    if (Constants.executionEnvironment === "storeClient") {
+      console.log("🚫 Push Notifications skipped in Expo Go");
+      return;
+    }
+
     try {
-      // 1. Android Channel Setup
       if (Platform.OS === "android") {
         await Notifications.setNotificationChannelAsync("default", {
           name: "default",
@@ -105,58 +164,82 @@ export default function RootLayout() {
         });
       }
 
-      // 2. Check Device & Permissions
       if (Device.isDevice) {
         const { status: existingStatus } =
           await Notifications.getPermissionsAsync();
         let finalStatus = existingStatus;
+
         if (existingStatus !== "granted") {
           const { status } = await Notifications.requestPermissionsAsync();
           finalStatus = status;
         }
+
         if (finalStatus !== "granted") {
-          console.log("Permission not granted!");
+          Alert.alert("Error", "Permission not granted for notifications");
           return;
         }
 
-        // 3. CAPTURE TOKEN & SAVE TO SUPABASE
-        const projectId = undefined; // Automatically inferred by Expo
-        const token = (await Notifications.getExpoPushTokenAsync({ projectId }))
-          .data;
-        console.log("🔥 Push Token:", token);
+        // 1. GET PROJECT ID (Fix for "No projectId found" error)
+        // TODO: Copy your Project ID from https://expo.dev/accounts/your_username/projects/your_slug
+        const projectId =
+          Constants?.expoConfig?.extra?.eas?.projectId ??
+          Constants?.easConfig?.projectId ??
+          "219b7322-3644-46d0-b920-d54f17be6834";
 
+        if (!projectId) {
+          Alert.alert(
+            "Error",
+            "Project ID is missing. Please hardcode it in _layout.tsx for testing.",
+          );
+          return;
+        }
+
+        if (!projectId) {
+          console.log("Project ID missing. Ensure eas.json is configured.");
+          // We continue anyway, hoping Expo infers it, but logging the warning.
+        }
+
+        // 2. GET TOKEN
+        console.log("Attempting to get token with Project ID:", projectId);
+        const tokenData = await Notifications.getExpoPushTokenAsync({
+          projectId: projectId,
+        });
+        const token = tokenData.data;
+        console.log("New Token Generated:", token);
+
+        // 3. SAVE TO SUPABASE
         const {
           data: { user },
         } = await supabase.auth.getUser();
+        console.log("Current User for Token:", user?.id);
+
+        await supabase.auth.getUser();
+
         if (user) {
           const { error } = await supabase
             .from("profiles")
             .update({ push_token: token })
             .eq("id", user.id);
 
-          if (error) console.log("DB Token Error:", error.message);
+          if (error) {
+            console.error("Supabase Save Error:", error);
+            Alert.alert("Token Save Failed", error.message);
+          }
+
+          if (error) {
+            Alert.alert("DB Error", error.message);
+            console.log("DB Error:", error);
+          } else {
+            console.log("✅ Token saved to DB!", token);
+          }
+        } else {
+          console.log("User not logged in, cannot save token.");
         }
       } else {
         console.log("Must use physical device for Push Notifications");
       }
-
-      // 4. (Optional) Keep your local daily schedule if you want
-      await Notifications.cancelAllScheduledNotificationsAsync();
-      await Notifications.scheduleNotificationAsync({
-        content: {
-          title: "☀️ Aaj ka Vichar",
-          body: "Apni soch badlo, jeevan badlo. Tap to read daily quote.",
-          sound: true,
-        },
-        trigger: {
-          hour: 8,
-          minute: 0,
-          repeats: true,
-          channelId: "default",
-        } as any,
-      });
-    } catch (error) {
-      console.log("Notification Error:", error);
+    } catch (error: any) {
+      Alert.alert("Notification Error", error.message);
     }
   }
 
@@ -215,6 +298,8 @@ export default function RootLayout() {
 
           {/* GLOBAL VICTORY POPUP (Floats over EVERYTHING) */}
           <GlobalCelebration />
+          {/* THE NEW FERRARI ALERT SYSTEM 🏎️ */}
+          <CustomAlert />
         </View>
       </PlayerProvider>
     </ThemeProvider>

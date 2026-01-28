@@ -1,7 +1,8 @@
 import { Colors } from "@/constants/theme";
 import { Ionicons } from "@expo/vector-icons";
-import { useRouter } from "expo-router";
-import React, { useEffect, useState } from "react";
+import { BlurView } from "expo-blur";
+import { useFocusEffect, useRouter } from "expo-router";
+import React, { useCallback, useState } from "react";
 import {
   ActivityIndicator,
   Dimensions,
@@ -19,7 +20,6 @@ import { LinearGradient } from "expo-linear-gradient";
 import Animated, {
   Easing,
   FadeInDown,
-  interpolateColor,
   useAnimatedStyle,
   useSharedValue, // <--- NEW
   withDelay, // <--- NEW
@@ -34,7 +34,8 @@ const { width } = Dimensions.get("window");
 export default function ExploreScreen() {
   const router = useRouter();
   // Get isPremium to check lock status
-  const { playTrackList, isPremium } = usePlayer();
+  // Added currentTrack to check for padding
+  const { playTrackList, isPremium, currentTrack } = usePlayer();
   const [query, setQuery] = useState("");
   const [searchResults, setSearchResults] = useState([]);
   const [isSearching, setIsSearching] = useState(false);
@@ -101,9 +102,12 @@ export default function ExploreScreen() {
   const [categories, setCategories] = useState([]);
   const [loading, setLoading] = useState(true);
 
-  useEffect(() => {
-    fetchCategories();
-  }, []);
+  // FIXED: Refetch categories every time you open this tab
+  useFocusEffect(
+    useCallback(() => {
+      fetchCategories();
+    }, []),
+  );
 
   async function fetchCategories() {
     try {
@@ -126,38 +130,56 @@ export default function ExploreScreen() {
     <View style={styles.container}>
       {/* Background removed to show Live Orb Wallpaper */}
 
-      <ScrollView contentContainerStyle={styles.scrollContent}>
-        {/* Header */}
+      <ScrollView
+        contentContainerStyle={[
+          styles.scrollContent,
+          { paddingBottom: currentTrack ? 160 : 100 }, // <--- Dynamic Padding
+        ]}
+      >
+        {/* 1. NEW HEADER (Like Favorites) */}
+        <View style={styles.header}>
+          <TouchableOpacity
+            onPress={() => router.back()}
+            style={styles.backBtn}
+            hitSlop={{ top: 10, bottom: 10, left: 10, right: 10 }}
+          >
+            <Ionicons name="chevron-back" size={24} color="#fff" />
+          </TouchableOpacity>
+          <Text style={styles.headerTitleSmall}>Explore</Text>
+          <View style={{ width: 40 }} />
+        </View>
+
+        {/* 2. BIG TITLES */}
         <Animated.View
           entering={FadeInDown.delay(100).springify()}
-          style={styles.header}
+          style={{ paddingHorizontal: 20, marginBottom: 20 }}
         >
-          <Text style={styles.title}>Explore Realms 🪐</Text>
-          <Text style={styles.subtitle}>
-            Where do you want to travel mentally today?
-          </Text>
+          <Text style={styles.title}>Realms 🪐</Text>
+          <Text style={styles.subtitle}>Where will you travel today?</Text>
         </Animated.View>
 
-        {/* --- SEARCH BAR START --- */}
-        <View style={styles.searchContainer}>
-          <Ionicons
-            name="search"
-            size={20}
-            color="#888"
-            style={{ marginRight: 10 }}
-          />
-          <TextInput
-            placeholder="Search for speech..."
-            placeholderTextColor="#666"
-            style={styles.searchInput}
-            value={query}
-            onChangeText={handleSearch}
-          />
-          {query.length > 0 && (
-            <TouchableOpacity onPress={() => handleSearch("")}>
-              <Ionicons name="close-circle" size={20} color="#888" />
-            </TouchableOpacity>
-          )}
+        {/* 3. NEW GLASS PILL SEARCH BAR */}
+        <View style={{ paddingHorizontal: 20, marginBottom: 25 }}>
+          <BlurView intensity={20} tint="light" style={styles.glassSearch}>
+            <Ionicons
+              name="search"
+              size={20}
+              color="#CCC"
+              style={{ marginRight: 10 }}
+            />
+            <TextInput
+              placeholder="Search specific vibrations..."
+              placeholderTextColor="rgba(255,255,255,0.4)"
+              style={styles.searchInput}
+              value={query}
+              onChangeText={handleSearch}
+            />
+            {query.length > 0 && (
+              <TouchableOpacity onPress={() => handleSearch("")}>
+                <Ionicons name="close-circle" size={20} color="#FFF" />
+              </TouchableOpacity>
+            )}
+          </BlurView>
         </View>
 
         {/* --- SEARCH RESULTS LIST --- */}
@@ -286,6 +308,7 @@ export default function ExploreScreen() {
                   key={item.id}
                   item={item}
                   index={index}
+                  color={getSmartColor(item.name)} // <--- ADD THIS LINE
                   onPress={() =>
                     router.push({
                       pathname: "/(tabs)/playlist",
@@ -318,125 +341,158 @@ function getCategoryColor(index) {
 // --- 3. ALIVE CARD COMPONENT (Floating + Pulse + Shimmer) ---
 // --- 3. ALIVE CARD COMPONENT (Rainbow + Floating + Diagonal Shimmer) ---
 // --- 3. ALIVE CARD COMPONENT (Distinct Rainbows + Diagonal Shimmer) ---
-function ShimmerCard({ item, index, onPress }) {
+// --- 3. ALIVE CARD COMPONENT (Wide Portal Style) ---
+function ShimmerCard({ item, index, onPress, color }) {
   // Movement Values
-  const translateX = useSharedValue(-200); // Start further back for diagonal coverage
-  const translateY = useSharedValue(0);
-  const scale = useSharedValue(1);
-  const rainbowProgress = useSharedValue(0);
+  const translateX = useSharedValue(-200);
 
   React.useEffect(() => {
-    // A. Shimmer Loop
     const delay = Math.random() * 2000 + 500;
     translateX.value = withRepeat(
       withSequence(
         withDelay(
           delay,
           withTiming(400, { duration: 1500, easing: Easing.linear }),
-        ), // Move across
-        withTiming(-200, { duration: 0 }), // Reset
+        ),
+        withTiming(-200, { duration: 0 }),
       ),
       -1,
       false,
     );
-
-    // B. Floating Loop
-    translateY.value = withRepeat(
-      withSequence(
-        withTiming(-8, { duration: 2500, easing: Easing.inOut(Easing.ease) }),
-        withTiming(0, { duration: 2500, easing: Easing.inOut(Easing.ease) }),
-      ),
-      -1,
-      true,
-    );
-
-    // C. Rainbow Color Loop
-    rainbowProgress.value = withRepeat(
-      withTiming(1, { duration: 10000, easing: Easing.linear }),
-      -1,
-      true,
-    );
   }, []);
 
-  // 1. Rainbow Style: Use 'index' to shift the colors so they don't match
-  const animatedBgStyle = useAnimatedStyle(() => {
-    // Offset the progress based on index so each card has a different color at the same time
-    const localProgress = (rainbowProgress.value + index * 0.2) % 1;
-
-    const backgroundColor = interpolateColor(
-      localProgress,
-      [0, 0.2, 0.4, 0.6, 0.8, 1],
-      ["#FF6B6B", "#4ECDC4", "#45B7D1", "#96C93D", "#FFA07A", "#FF6B6B"],
-    );
-    return { backgroundColor };
-  });
-
-  // 2. Shimmer Style: Move Diagonally
-  const shimmerStyle = useAnimatedStyle(() => ({
-    // TRANSFORM ORDER MATTERS: Rotate first, then Translate moves along the new angle
-    transform: [{ rotate: "-45deg" }, { translateX: translateX.value }],
+  const animatedBgStyle = useAnimatedStyle(() => ({
+    backgroundColor: color || "#555",
   }));
 
-  const floatingStyle = useAnimatedStyle(() => ({
-    transform: [{ translateY: translateY.value }, { scale: scale.value }],
+  const shimmerStyle = useAnimatedStyle(() => ({
+    transform: [{ rotate: "-45deg" }, { translateX: translateX.value }],
   }));
 
   return (
     <Animated.View
       entering={FadeInDown.delay(index * 100).springify()}
-      style={styles.cardWrapper}
+      style={{ marginBottom: 15, width: "100%" }} // <--- Full Width
     >
       <TouchableOpacity
-        activeOpacity={1}
+        activeOpacity={0.9}
         onPress={onPress}
-        onPressIn={() => (scale.value = withTiming(0.95))}
-        onPressOut={() => (scale.value = withTiming(1))}
+        style={{
+          height: 100, // <--- Sleek Height
+          borderRadius: 20,
+          overflow: "hidden",
+          borderWidth: 1,
+          borderColor: "rgba(255,255,255,0.15)",
+        }}
       >
-        <Animated.View style={[styles.card, animatedBgStyle, floatingStyle]}>
-          <View style={styles.iconCircle}>
-            <Ionicons name={item.icon || "planet"} size={32} color="#fff" />
-          </View>
+        <Animated.View
+          style={[StyleSheet.absoluteFill, animatedBgStyle, { opacity: 0.8 }]}
+        />
 
-          <View>
-            <Text style={styles.cardTitle}>{item.name}</Text>
-            <Text style={styles.cardSub}>OPEN PORTAL ➔</Text>
-          </View>
-
-          {/* Shimmer Effect */}
+        {/* Content Row */}
+        <View
+          style={{
+            flexDirection: "row",
+            alignItems: "center",
+            height: "100%",
+            paddingHorizontal: 20,
+          }}
+        >
+          {/* Left Icon */}
           <View
-            style={[
-              StyleSheet.absoluteFill,
-              { overflow: "hidden", borderRadius: 25 },
-            ]}
-            pointerEvents="none"
+            style={{
+              width: 50,
+              height: 50,
+              borderRadius: 25,
+              backgroundColor: "rgba(0,0,0,0.2)",
+              justifyContent: "center",
+              alignItems: "center",
+              marginRight: 15,
+            }}
           >
-            <Animated.View style={[styles.shimmerBar, shimmerStyle]}>
-              <LinearGradient
-                colors={["transparent", "rgba(255,255,255,0.4)", "transparent"]}
-                style={StyleSheet.absoluteFill}
-                start={{ x: 0, y: 0 }}
-                end={{ x: 1, y: 0 }}
-              />
-            </Animated.View>
+            <Ionicons name={item.icon || "planet"} size={26} color="#fff" />
           </View>
+
+          {/* Text Middle */}
+          <View style={{ flex: 1 }}>
+            <Text
+              style={{
+                color: "#FFF",
+                fontSize: 18,
+                fontWeight: "bold",
+                letterSpacing: 0.5,
+              }}
+            >
+              {item.name}
+            </Text>
+            <Text
+              style={{
+                color: "rgba(255,255,255,0.7)",
+                fontSize: 10,
+                fontWeight: "700",
+                letterSpacing: 1,
+              }}
+            >
+              OPEN PORTAL
+            </Text>
+          </View>
+
+          {/* Right Arrow */}
+          <Ionicons
+            name="chevron-forward"
+            size={24}
+            color="rgba(255,255,255,0.3)"
+          />
+        </View>
+
+        {/* Shimmer Overlay */}
+        <Animated.View style={[styles.shimmerBar, shimmerStyle]}>
+          <LinearGradient
+            colors={["transparent", "rgba(255,255,255,0.3)", "transparent"]}
+            style={StyleSheet.absoluteFill}
+            start={{ x: 0, y: 0 }}
+            end={{ x: 1, y: 0 }}
+          />
         </Animated.View>
       </TouchableOpacity>
     </Animated.View>
   );
 }
-// --- 4. FIXED STYLES (All in one place) ---
 const styles = StyleSheet.create({
   container: {
     flex: 1,
-    //backgroundColor: "#000",
+    backgroundColor: "transparent",
   },
   scrollContent: {
-    paddingTop: 70,
-    paddingHorizontal: 20,
     paddingBottom: 100,
   },
+
+  // --- NEW HEADER STYLES ---
   header: {
-    marginBottom: 20,
+    paddingTop: 60,
+    paddingHorizontal: 20,
+    paddingBottom: 10,
+    flexDirection: "row",
+    alignItems: "center",
+    justifyContent: "space-between",
+    zIndex: 10,
+  },
+  backBtn: {
+    width: 45,
+    height: 45,
+    borderRadius: 25,
+    backgroundColor: "rgba(255,255,255,0.1)",
+    justifyContent: "center",
+    alignItems: "center",
+    borderWidth: 1,
+    borderColor: "rgba(255,255,255,0.05)",
+  },
+  headerTitleSmall: {
+    color: "rgba(255,255,255,0.5)",
+    fontSize: 12,
+    fontWeight: "700",
+    textTransform: "uppercase",
+    letterSpacing: 1,
   },
   title: {
     color: "#fff",
@@ -449,30 +505,34 @@ const styles = StyleSheet.create({
     fontSize: 16,
     marginTop: 5,
   },
-  // Search Styles
-  searchContainer: {
+
+  // --- NEW SEARCH BAR ---
+  glassSearch: {
     flexDirection: "row",
-    backgroundColor: "rgba(255,255,255,0.1)",
-    borderRadius: 15,
-    padding: 15,
     alignItems: "center",
-    marginBottom: 25,
+    paddingHorizontal: 15,
+    height: 50,
+    borderRadius: 25, // Pill Shape
+    overflow: "hidden",
     borderWidth: 1,
     borderColor: "rgba(255,255,255,0.1)",
+    backgroundColor: "rgba(0,0,0,0.3)", // Dark Glass Base
   },
   searchInput: {
     flex: 1,
     color: "#fff",
     fontSize: 16,
     height: "100%",
-    marginLeft: 10,
   },
+
+  // --- RESULTS ---
   sectionTitle: {
     color: "#888",
     marginBottom: 10,
     fontSize: 12,
     textTransform: "uppercase",
     letterSpacing: 1,
+    paddingHorizontal: 20,
   },
   resultItem: {
     flexDirection: "row",
@@ -483,63 +543,21 @@ const styles = StyleSheet.create({
     marginBottom: 10,
     borderWidth: 1,
     borderColor: "rgba(255,255,255,0.1)",
+    marginHorizontal: 20,
   },
-  // Card Styles
+
+  // --- GRID REMOVED (Now a List) ---
   grid: {
-    flexDirection: "row",
-    flexWrap: "wrap",
-    justifyContent: "space-between",
+    paddingHorizontal: 20,
+    paddingBottom: 40,
   },
-  cardWrapper: {
-    width: "48%",
-    marginBottom: 20,
-  },
-  card: {
-    height: 180,
-    borderRadius: 25,
-    padding: 20,
-    justifyContent: "space-between",
-    overflow: "hidden",
-    borderWidth: 1,
-    borderColor: "rgba(255,255,255,0.2)",
-    // Shadows
-    elevation: 8,
-    shadowColor: "#000",
-    shadowOffset: { width: 0, height: 8 },
-    shadowOpacity: 0.4,
-    shadowRadius: 8,
-  },
-  iconCircle: {
-    width: 50,
-    height: 50,
-    borderRadius: 25,
-    backgroundColor: "rgba(255,255,255,0.2)",
-    justifyContent: "center",
-    alignItems: "center",
-  },
-  cardTitle: {
-    color: "#fff",
-    fontSize: 20,
-    fontWeight: "700",
-    marginTop: 10,
-    textShadowColor: "rgba(0,0,0,0.5)",
-    textShadowOffset: { width: 0, height: 1 },
-    textShadowRadius: 4,
-  },
-  cardSub: {
-    color: "rgba(255,255,255,0.8)",
-    fontSize: 10,
-    fontWeight: "800",
-    letterSpacing: 1.5,
-    textTransform: "uppercase",
-  },
-  // Shimmer Style
+
+  // Shimmer Bar for Animation
   shimmerBar: {
-    width: 200, // Wider to cover diagonal sweep
-    height: "200%", // Taller to cover rotated height
-    top: -50, // Start position
+    width: 200,
+    height: "200%",
+    top: -50,
     left: -50,
-    // Note: Remove any 'transform' here because we handle it in the animation logic now
   },
 });
 
@@ -579,4 +597,50 @@ const extraStyles = {
     letterSpacing: 1,
   },
 };
+// --- SMART COLOR LOGIC FOR 4 PILLARS ---
+function getSmartColor(name: string) {
+  const n = name.toLowerCase();
+
+  // Pillar 1: Morning / Energy (Gold/Orange)
+  if (
+    n.includes("morning") ||
+    n.includes("energy") ||
+    n.includes("gym") ||
+    n.includes("power")
+  )
+    return "#FFD700"; // Gold
+  if (n.includes("focus") || n.includes("work") || n.includes("study"))
+    return "#FFA500"; // Orange
+
+  // Pillar 2: Sleep / Night (Dark Blues)
+  if (
+    n.includes("sleep") ||
+    n.includes("night") ||
+    n.includes("nidra") ||
+    n.includes("dream")
+  )
+    return "#1A237E"; // Deep Blue
+  if (n.includes("rain") || n.includes("calm") || n.includes("relax"))
+    return "#483D8B"; // Slate Blue
+
+  // Pillar 3: Emotion / Healing (Teal/Pink)
+  if (n.includes("anxiety") || n.includes("stress") || n.includes("peace"))
+    return "#008080"; // Teal
+  if (n.includes("heart") || n.includes("sad") || n.includes("heal"))
+    return "#FF6B6B"; // Soft Red
+
+  // Pillar 4: Spiritual (Purple/Saffron)
+  if (
+    n.includes("god") ||
+    n.includes("mantra") ||
+    n.includes("chant") ||
+    n.includes("shiva")
+  )
+    return "#FF9933"; // Saffron
+  if (n.includes("soul") || n.includes("meditation") || n.includes("mind"))
+    return "#9C27B0"; // Purple
+
+  // Default Fallback
+  return "#333";
+}
 Object.assign(styles, extraStyles);

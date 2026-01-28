@@ -1,3 +1,4 @@
+import AsyncStorage from "@react-native-async-storage/async-storage";
 import { Audio } from "expo-av";
 import { useRouter } from "expo-router";
 import React, {
@@ -16,7 +17,10 @@ export function PlayerProvider({ children }) {
   const router = useRouter(); // <--- NEW
   const soundRef = useRef(null); // <--- NEW (To track sound even during logout)
   const currentTrackRef = useRef(null);
-  const hasRewardedRef = useRef(false); // <--- ADD THIS
+  // FIX: Track specific IDs to prevent infinite loops when navigating
+  const lastFinishedIdRef = useRef(null);
+  // FIX: Use a Set to track ALL songs rewarded in this session (Prevents infinite loop)
+  const rewardedSongIds = useRef(new Set());
   const [sound, setSound] = useState(null);
   const [isPlaying, setIsPlaying] = useState(false);
   const [currentTrack, setCurrentTrack] = useState(null);
@@ -27,9 +31,31 @@ export function PlayerProvider({ children }) {
   const [isBuffering, setIsBuffering] = useState(false);
 
   const [isPremium, setIsPremium] = useState(false);
+  // ✅ ADD THESE TWO LINES:
+  const [isLifetime, setIsLifetime] = useState(false);
+  const [subscriptionExpiry, setSubscriptionExpiry] = useState(null);
   const [likedTrackIds, setLikedTrackIds] = useState<Set<string>>(new Set()); // Stores IDs of liked songs
   // Global Celebration State
   const [showCelebration, setShowCelebration] = useState(false);
+  // --- GLOBAL PREMIUM ALERT STATE ---
+  const [alertConfig, setAlertConfig] = useState({
+    visible: false,
+    title: "",
+    message: "",
+    icon: "lock-closed", // default icon
+    primaryText: "OK",
+    onPrimaryPress: null,
+    secondaryText: null,
+    onSecondaryPress: null,
+  });
+
+  const showAlert = (config) => {
+    setAlertConfig({ ...config, visible: true });
+  };
+
+  const hideAlert = () => {
+    setAlertConfig((prev) => ({ ...prev, visible: false }));
+  };
 
   // --- SLEEP TIMER STATE ---
   const [sleepTimer, setSleepTimer] = useState(null); // Stores timeout ID
@@ -58,7 +84,10 @@ export function PlayerProvider({ children }) {
     const {
       data: { subscription },
     } = supabase.auth.onAuthStateChange(async (event) => {
-      checkPremium();
+      // ✅ FIX LOOP: Only check premium if we are NOT signing out
+      if (event !== "SIGNED_OUT") {
+        checkPremium();
+      }
 
       // FIX 2: STOP MUSIC ON LOGOUT
       if (event === "SIGNED_OUT") {
@@ -79,16 +108,90 @@ export function PlayerProvider({ children }) {
     const {
       data: { user },
     } = await supabase.auth.getUser();
+
     if (user) {
+      // 1. Fetch 'is_premium' AND 'subscription_expiry'
       const { data } = await supabase
         .from("profiles")
-        .select("is_premium")
+        .select("is_premium, subscription_expiry")
         .eq("id", user.id)
         .single();
-      // If data exists, set premium. If not, false.
-      setIsPremium(data?.is_premium || false);
+
+      if (data) {
+        // 2. Check if Lifetime Premium OR Temporary Access is valid
+        const hasLifetime = data.is_premium;
+        const hasValidSubscription =
+          data.subscription_expiry &&
+          new Date(data.subscription_expiry) > new Date();
+
+        setIsPremium(hasLifetime || hasValidSubscription);
+
+        // Update details
+        setIsLifetime(hasLifetime);
+        setSubscriptionExpiry(data.subscription_expiry);
+      } else {
+        // 🚨 ZOMBIE RECOVERY: User exists, but Profile is missing
+        console.log(
+          "⚠️ Profile missing for logged-in user! Attempting auto-fix...",
+        );
+
+        const { error: insertError } = await supabase.from("profiles").insert([
+          {
+            id: user.id,
+            email: user.email,
+            full_name: "Soul",
+          },
+        ]);
+
+        if (!insertError) {
+          console.log("✅ Profile created! Retrying check...");
+          checkPremium(); // Retry
+        } else {
+          console.log("❌ Critical: Auto-fix failed.");
+        }
+      }
     } else {
-      setIsPremium(false); // Ensure we reset to false if logged out
+      // No user logged in. Just reset state.
+      setIsPremium(false);
+    }
+  }
+
+  // --- PUSH NOTIFICATION HELPER ---
+  async function sendPushNotification(title, body) {
+    try {
+      const {
+        data: { user },
+      } = await supabase.auth.getUser();
+      if (!user) return;
+
+      // 1. Get Token
+      const { data } = await supabase
+        .from("profiles")
+        .select("push_token")
+        .eq("id", user.id)
+        .single();
+
+      if (data?.push_token) {
+        // 2. Send via Expo API
+        await fetch("https://exp.host/--/api/v2/push/send", {
+          method: "POST",
+          headers: {
+            Accept: "application/json",
+            "Accept-encoding": "gzip, deflate",
+            "Content-Type": "application/json",
+          },
+          body: JSON.stringify({
+            to: data.push_token,
+            title: title,
+            body: body,
+            sound: "default",
+            data: { extraData: "Some data" },
+          }),
+        });
+        console.log("Push Sent:", title);
+      }
+    } catch (e) {
+      console.log("Push Error:", e);
     }
   }
 
@@ -154,7 +257,12 @@ export function PlayerProvider({ children }) {
     try {
       if (sound) await sound.unloadAsync();
 
-      hasRewardedRef.current = false; // <--- RESET REWARD FLAG
+      // Reset finish tracker for the new song
+      lastFinishedIdRef.current = null;
+      // ✅ BUSINESS LOGIC UPDATE:
+      // Allow rewarding this song again. If they listen to 90% of it again, they deserve the points.
+      // If we don't delete this, they only get points ONCE per app session (which is bad for retention).
+      rewardedSongIds.current.delete(track.id);
 
       const { sound: newSound, status } = await Audio.Sound.createAsync(
         { uri: track.url },
@@ -172,26 +280,66 @@ export function PlayerProvider({ children }) {
     }
   }
 
-  const onPlaybackStatusUpdate = (status) => {
+  const onPlaybackStatusUpdate = async (status) => {
     if (status.isLoaded) {
       setDuration(status.durationMillis || 0);
       setPosition(status.positionMillis || 0);
       setIsBuffering(status.isBuffering);
       setIsPlaying(status.isPlaying);
 
-      // --- MOVED REWARD LOGIC HERE (Runs in Background) ---
+      // --- FIX: REWARD LOGIC (Use Set to prevent duplicates) ---
       if (
         status.durationMillis > 0 &&
-        status.positionMillis > status.durationMillis * 0.9 &&
-        !hasRewardedRef.current
+        status.positionMillis > status.durationMillis * 0.8 &&
+        currentTrackRef.current &&
+        !rewardedSongIds.current.has(currentTrackRef.current.id) // <--- PREVENTS LOOPING
       ) {
-        hasRewardedRef.current = true;
-        triggerCelebration(); // <--- Triggers the Pop-up & Haptics globally
+        rewardedSongIds.current.add(currentTrackRef.current.id); // <--- ADD TO LIST
+        triggerCelebration();
       }
 
+      // --- FINISH LOGIC ---
       if (status.didJustFinish) {
-        if (currentTrackRef.current) {
+        if (
+          currentTrackRef.current &&
+          lastFinishedIdRef.current !== currentTrackRef.current.id
+        ) {
+          lastFinishedIdRef.current = currentTrackRef.current.id;
+
+          // A. Update Stats
           updateStats(currentTrackRef.current.duration);
+          incrementGlobalPlays(currentTrackRef.current.id);
+
+          // B. MISSION COMPLETE LOGIC
+          if (currentTrackRef.current.isMission) {
+            const today = new Date().toISOString().split("T")[0];
+            // 1. Save locally so Home Screen knows immediately
+            await AsyncStorage.setItem("mission_completed_date", today);
+
+            // 2. Update DB
+            const {
+              data: { user },
+            } = await supabase.auth.getUser();
+            if (user) {
+              const { data: p } = await supabase
+                .from("profiles")
+                .select("points")
+                .eq("id", user.id)
+                .single();
+              if (p) {
+                await supabase
+                  .from("profiles")
+                  .update({ points: (p.points || 0) + 50 })
+                  .eq("id", user.id);
+                // Add this:
+                sendPushNotification(
+                  "Sankalp Fulfilled 🎯",
+                  "Mission Complete! +50 Karma Points added to your soul.",
+                );
+                Vibration.vibrate([0, 500, 200, 500]); // Success Vibrate
+              }
+            }
+          }
         }
         playNext();
       }
@@ -204,8 +352,32 @@ export function PlayerProvider({ children }) {
     await loadTrack(tracks[index]);
   }
 
+  // NEW: Close Player Function ❌
+  const closePlayer = async () => {
+    if (sound) {
+      await sound.stopAsync();
+      await sound.unloadAsync();
+      setSound(null);
+    }
+    setCurrentTrack(null);
+    setIsPlaying(false);
+  };
+
   async function togglePlayPause() {
     if (!sound) return;
+
+    // FIX: If song finished, replay from start
+    if (position >= duration && duration > 0) {
+      // Allow earning reward again on replay (Optional - remove this line if you want 1 reward per session)
+      if (currentTrackRef.current) {
+        rewardedSongIds.current.delete(currentTrackRef.current.id);
+      }
+
+      await sound.replayAsync();
+      setIsPlaying(true);
+      return;
+    }
+
     if (isPlaying) await sound.pauseAsync();
     else await sound.playAsync();
   }
@@ -297,6 +469,19 @@ export function PlayerProvider({ children }) {
       // Simple streak logic: if last listened date is NOT today, add 1
       if (profile.last_listened_date !== today) {
         newStreak += 1;
+
+        // --- NEW: STREAK COMPLETION LOGIC ---
+        // 1. Send Push Notification (System Tray)
+        sendPushNotification(
+          "Streak 🔥",
+          `You hit a ${newStreak}-day streak! Keep it up!`,
+        );
+
+        // 2. Save Flag for Profile Screen (So we know to celebrate when they visit)
+        await AsyncStorage.setItem(
+          "streak_celebration_pending",
+          newStreak.toString(),
+        );
       }
 
       await supabase
@@ -307,6 +492,20 @@ export function PlayerProvider({ children }) {
           total_minutes: (profile.total_minutes || 0) + Math.ceil(seconds / 60),
         })
         .eq("id", user.id);
+    }
+  }
+
+  // --- NEW: Update Global Play Count ---
+  async function incrementGlobalPlays(trackId) {
+    try {
+      // Calls the SQL function we just made
+      const { error } = await supabase.rpc("increment_play_count", {
+        song_id: trackId,
+      });
+      if (error) console.log("Play Count Error:", error.message);
+      else console.log("Recorded +1 Play for Song ID:", trackId);
+    } catch (e) {
+      console.log("Analytics Error:", e);
     }
   }
 
@@ -369,6 +568,12 @@ export function PlayerProvider({ children }) {
 
       console.log("Global Reward Triggered! +10 XP");
 
+      // Add this line after updating DB:
+      sendPushNotification(
+        "Divinity Achieved ✨",
+        "You just earned +10 Karma Points! Keep the vibes high.",
+      );
+
       // Hide after 3s
       setTimeout(() => setShowCelebration(false), 3000);
     } catch (e) {
@@ -379,7 +584,10 @@ export function PlayerProvider({ children }) {
   return (
     <PlayerContext.Provider
       value={{
+        refreshProfile: checkPremium, // <--- ADD THIS LINE (Connects Shop to Context)
         isPremium, // <--- ADD THIS LINE (Fixes the bug)
+        isLifetime, // <--- ADD
+        subscriptionExpiry, // <--- ADD
         currentTrack,
         isPlaying,
         position,
@@ -388,6 +596,7 @@ export function PlayerProvider({ children }) {
         playTrackList,
         togglePlayPause,
         playNext,
+        closePlayer, // <--- EXPORT THIS
         playPrev,
         seekTo,
         startSleepTimer, // <--- ADD
@@ -399,6 +608,9 @@ export function PlayerProvider({ children }) {
         triggerCelebration,
         showCelebration,
         setShowCelebration, // <--- ADD THIS LINE
+        alertConfig, // <--- Export State
+        showAlert, // <--- Export Function
+        hideAlert, // <--- Export Function
         fullPlayerVisible: !!currentTrack,
       }}
     >

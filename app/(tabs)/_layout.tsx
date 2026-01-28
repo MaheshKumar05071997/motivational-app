@@ -6,7 +6,6 @@ import { Platform, View } from "react-native";
 import LiveBackground from "@/components/LiveBackground";
 
 import { HapticTab } from "@/components/haptic-tab";
-import MiniPlayer from "@/components/MiniPlayer";
 import { Colors } from "@/constants/theme";
 import { useColorScheme } from "@/hooks/use-color-scheme";
 import { Ionicons } from "@expo/vector-icons";
@@ -39,18 +38,25 @@ export default function TabLayout() {
           tabBarStyle: Platform.select({
             ios: {
               position: "absolute",
-              backgroundColor: "rgba(0,0,0,0.3)", // More transparent
-              borderTopColor: "rgba(255,255,255,0.1)",
+              backgroundColor: "#000", // <--- SOLID BLACK (Not Transparent)
+              borderTopColor: "#333",
+              borderTopWidth: 1,
               elevation: 0,
+              height: 100, // Give it some height
+              paddingTop: 10,
             },
             default: {
-              backgroundColor: "rgba(0,0,0,0.3)",
-              borderTopColor: "rgba(255,255,255,0.1)",
+              backgroundColor: "#000", // <--- SOLID BLACK
+              borderTopColor: "#333",
+              borderTopWidth: 1,
               elevation: 0,
               position: "absolute",
               bottom: 0,
               left: 0,
               right: 0,
+              height: 90, // <--- INCREASED HEIGHT (Was 70)
+              paddingBottom: 30,
+              paddingTop: 10,
             },
           }),
         }}
@@ -101,10 +107,11 @@ export default function TabLayout() {
           name="downloads"
           options={{ href: null, title: "Offline" }}
         />
+
+        <Tabs.Screen name="shop" options={{ href: null, title: "Shop" }} />
       </Tabs>
 
-      {/* 3. Your MiniPlayer Logic */}
-      {!isProfile && <MiniPlayer />}
+      {/* 3. Your MiniPlayer Logic - REMOVED (Handled in Root Layout) */}
     </View>
   );
 }

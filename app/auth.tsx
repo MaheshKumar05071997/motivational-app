@@ -1,11 +1,13 @@
 import { Colors } from "@/constants/theme";
 import { Ionicons } from "@expo/vector-icons";
 import { BlurView } from "expo-blur";
+import * as ExpoLinking from "expo-linking"; // <--- ADD THIS for createURL
 import React, { useState } from "react";
 import {
   ActivityIndicator,
   Alert,
   KeyboardAvoidingView,
+  Linking,
   Platform,
   StyleSheet,
   Text,
@@ -15,9 +17,11 @@ import {
 } from "react-native";
 import Animated, { FadeInUp } from "react-native-reanimated";
 import { supabase } from "../supabaseConfig";
+import { usePlayer } from "./PlayerContext";
 
 export default function AuthScreen() {
   const [email, setEmail] = useState("");
+  const { showAlert } = usePlayer();
   const [password, setPassword] = useState("");
   const [loading, setLoading] = useState(false);
   const [isLogin, setIsLogin] = useState(true);
@@ -27,18 +31,97 @@ export default function AuthScreen() {
     setLoading(true);
     try {
       if (isLogin) {
-        const { error } = await supabase.auth.signInWithPassword({
+        // --- 1. LOG IN ---
+        const {
+          data: { user },
+          error,
+        } = await supabase.auth.signInWithPassword({
           email,
           password,
         });
         if (error) throw error;
+
+        // --- 2. SAFETY CHECK: CREATE PROFILE IF MISSING ---
+        if (user) {
+          const { data: profile } = await supabase
+            .from("profiles")
+            .select("*")
+            .eq("id", user.id)
+            .single();
+
+          if (!profile) {
+            // Profile is missing! Create it now to prevent "Profile Not Found" errors.
+            await supabase.from("profiles").insert([
+              {
+                id: user.id,
+                email: user.email, // <--- ADD THIS LINE
+                full_name: "Soul",
+              },
+            ]);
+          }
+        }
       } else {
-        const { error } = await supabase.auth.signUp({ email, password });
+        // --- 1. SIGN UP ---
+        const {
+          data: { user },
+          error,
+        } = await supabase.auth.signUp({
+          email,
+          password,
+        });
         if (error) throw error;
+
+        // --- 2. CREATE PROFILE IMMEDIATELY ---
+        // This ensures the row exists even before the user logs in fully
+        if (user) {
+          await supabase.from("profiles").insert([
+            {
+              id: user.id,
+              email: user.email, // <--- ADD THIS LINE
+              full_name: "Soul",
+            },
+          ]);
+        }
+
         Alert.alert("Success", "Check your email for confirmation!");
       }
     } catch (error: any) {
-      Alert.alert("Error", error.message);
+      showAlert({
+        title: "Authentication Error",
+        message: error.message,
+        icon: "warning",
+        primaryText: "Try Again",
+      });
+    } finally {
+      setLoading(false);
+    }
+  }
+
+  // ✅ NEW: Google Sign In Handler
+  async function performGoogleSignIn() {
+    try {
+      setLoading(true);
+
+      // 1. Create a clean URL (e.g. motivationalapp://home)
+      const redirectUrl = ExpoLinking.createURL("home");
+      console.log("🚀 REDIRECT URL SENT TO SUPABASE:", redirectUrl);
+
+      // 2. Get the OAuth URL
+      const { data, error } = await supabase.auth.signInWithOAuth({
+        provider: "google",
+        options: {
+          redirectTo: redirectUrl,
+        },
+      });
+
+      if (error) throw error;
+
+      // 3. Open Browser
+      if (data.url) {
+        Linking.openURL(data.url);
+      }
+    } catch (e: any) {
+      Alert.alert("Google Login Error", e.message);
     } finally {
       setLoading(false);
     }
@@ -131,6 +214,69 @@ export default function AuthScreen() {
                 </Text>
               )}
             </TouchableOpacity>
+
+            {/* ✅ NEW: Google Button & Divider */}
+            {isLogin && (
+              <View
+                style={{ width: "100%", alignItems: "center", marginTop: 20 }}
+              >
+                {/* Divider */}
+                <View
+                  style={{
+                    flexDirection: "row",
+                    alignItems: "center",
+                    marginBottom: 20,
+                  }}
+                >
+                  <View
+                    style={{
+                      flex: 1,
+                      height: 1,
+                      backgroundColor: "rgba(255,255,255,0.1)",
+                    }}
+                  />
+                  <Text
+                    style={{
+                      color: "#666",
+                      marginHorizontal: 10,
+                      fontSize: 12,
+                    }}
+                  >
+                    OR
+                  </Text>
+                  <View
+                    style={{
+                      flex: 1,
+                      height: 1,
+                      backgroundColor: "rgba(255,255,255,0.1)",
+                    }}
+                  />
+                </View>
+
+                {/* Google Button */}
+                <TouchableOpacity
+                  onPress={performGoogleSignIn}
+                  style={{
+                    flexDirection: "row",
+                    alignItems: "center",
+                    backgroundColor: "#FFF",
+                    paddingVertical: 12,
+                    paddingHorizontal: 20,
+                    borderRadius: 16,
+                    width: "100%",
+                    justifyContent: "center",
+                    gap: 10,
+                  }}
+                >
+                  <Ionicons name="logo-google" size={20} color="#000" />
+                  <Text
+                    style={{ color: "#000", fontWeight: "600", fontSize: 16 }}
+                  >
+                    Sign in with Google
+                  </Text>
+                </TouchableOpacity>
+              </View>
+            )}
 
             {/* Toggle Mode */}
             <TouchableOpacity
